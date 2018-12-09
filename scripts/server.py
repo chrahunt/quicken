@@ -13,13 +13,15 @@ Requirements:
   - kill
 """
 import atexit
-import daemon
 import logging
 import logging.handlers
 import os
 from pathlib import Path
 import socketserver
 import sys
+
+import daemon
+from daemon.pidfile import TimeoutPIDLockFile
 
 from example.daemon.fd import max_pid_len, recv_fds
 from example.daemon.protocol import deserialize_state

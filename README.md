@@ -15,7 +15,6 @@ CLI tool should be able to get to work in less than 100ms.
 
 * Unix only.
 * Debugging may be less obvious for end users.
-* If there's an error on running the cli factory function then it shows up twice.
 
 # Goals
 
