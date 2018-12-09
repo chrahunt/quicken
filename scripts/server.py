@@ -21,15 +21,12 @@ import socketserver
 import sys
 
 import daemon
-from daemon.pidfile import TimeoutPIDLockFile
 
 from example.daemon.fd import max_pid_len, recv_fds
 from example.daemon.protocol import deserialize_state
 
 
 logger = logging.getLogger(__name__)
-
-
 
 
 def get_request_handler(callback):

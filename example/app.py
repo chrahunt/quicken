@@ -1,19 +1,16 @@
 import logging
-import os
-from pathlib import Path
-
-# Example packages that take some 500ms to load.
-import click
-import conans
-import requests
-
+import time
 
 logger = logging.getLogger(__name__)
+
+
+# Represents module import/load time.
+time.sleep(0.5)
 
 
 def cli():
     """Actual application entrypoint.
     """
     print('cli()')
-    Path('/tmp/app-output.txt').write_text(str(os.getpid()))
+    print('cli2()')
     logger.info('cli()')

@@ -1,5 +1,4 @@
 import os
-import logging
 import logging.config
 from pathlib import Path
 import signal
@@ -11,40 +10,40 @@ import uuid
 from daemon.pidfile import TimeoutPIDLockFile
 import pytest
 
-from example.daemon.server import run, client
+from example.daemon.server import run, make_client
 
 
 class UTCFormatter(logging.Formatter):
     converter = time.gmtime
 
 
-logging.config.dictConfig({
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'default': {
-            '()': UTCFormatter,
-            'format': '#### [{asctime}][{levelname}][{name}]\n    {message}',
-            'style': '{',
-        }
-    },
-    'handlers': {
-        'file': {
-            '()': 'logging.FileHandler',
-            'level': 'DEBUG',
-            'filename': 'pytest.log',
-            'encoding': 'utf-8',
-            'formatter': 'default',
-        }
-    },
-    'root': {
-        'handlers': ['file'],
-        'level': 'DEBUG',
-    }
-})
+#logging.config.dictConfig({
+#    'version': 1,
+#    'disable_existing_loggers': False,
+#    'formatters': {
+#        'default': {
+#            '()': UTCFormatter,
+#            'format': '#### [{asctime}][{levelname}][{name}]\n    {message}',
+#            'style': '{',
+#        }
+#    },
+#    'handlers': {
+#        'file': {
+#            '()': 'logging.FileHandler',
+#            'level': 'DEBUG',
+#            'filename': 'pytest.log',
+#            'encoding': 'utf-8',
+#            'formatter': 'default',
+#        }
+#    },
+#    'root': {
+#        'handlers': ['file'],
+#        'level': 'DEBUG',
+#    }
+#})
 
 
-logging.basicConfig(level=logging.DEBUG, filename='logs.log')
+#logging.basicConfig(level=logging.DEBUG, filename='logs.log')
 logger = logging.getLogger(__name__)
 
 
@@ -91,6 +90,7 @@ def test_daemon_starts():
     os.kill(int(pid), signal.SIGTERM)
 
 
+@pytest.mark.skip
 def test_daemon_communicates():
     logger.debug('test_daemon_communicates()')
     with tempfile.NamedTemporaryFile() as f:
@@ -112,3 +112,9 @@ def test_daemon_communicates():
         contents = f.read().decode('utf-8')
         os.kill(int(pid), signal.SIGTERM)
     assert contents == data
+
+def server_correctly_logs_unhandled_exceptions():
+    # Given a bug leading to exception in the handler implementation in daemon/server.py
+    # When the server encounters the error
+    # Then it will trace the error to the log file
+    ...

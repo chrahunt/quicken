@@ -2,9 +2,19 @@ import fcntl
 import os
 from pathlib import Path
 import signal
+from typing import Callable
 
 
 def wait_for_create(path: Path, timeout: float = 5) -> bool:
+    return _wait_for(path, lambda: path.exists(), timeout)
+
+
+def wait_for_delete(path: Path, timeout: float = 5) -> bool:
+    return _wait_for(path, lambda: not path.exists(), timeout)
+
+
+def _wait_for(
+        path: Path, predicate: Callable[[], bool], timeout: float = 5) -> bool:
     """
     Args:
         path
@@ -21,8 +31,8 @@ def wait_for_create(path: Path, timeout: float = 5) -> bool:
 
     def file_handler(_signum, _frame):
         nonlocal success, waiting
-        if path.exists():
-            # File was created, continue.
+        if predicate():
+            # Test passed.
             success = True
             waiting = False
     signal.signal(signal.SIGIO, file_handler)
