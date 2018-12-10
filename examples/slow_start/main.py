@@ -3,7 +3,7 @@
 import logging
 import os
 
-from .daemon.cli import cli_factory
+from quicken import cli_factory
 
 
 logging.basicConfig(level=logging.DEBUG)
@@ -22,7 +22,7 @@ def reload() -> bool:
     ]
 
 
-@cli_factory('example', bypass_daemon=disabled, reload_daemon=reload)
+@cli_factory('quicken', bypass_daemon=disabled, reload_daemon=reload)
 def main():
     logger.debug('main()')
     from .app import cli

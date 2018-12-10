@@ -1,12 +1,6 @@
-from enum import IntEnum
 import os
 import sys
 from typing import Dict
-
-
-class Types(IntEnum):
-    SHUTDOWN = 0
-    MESSAGE = 1
 
 
 def deserialize_state(data: bytes) -> Dict:

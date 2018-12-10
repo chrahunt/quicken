@@ -1,0 +1,24 @@
+language: python
+cache: pip
+sudo: false
+python:
+- '3.7'
+before_install:
+- pip install poetry
+install:
+- poetry install
+script:
+- poetry run pytest
+- poetry run
+- pylint quicken
+before_deploy:
+- poetry config http-basic.pypi $PYPI_USER $PYPI_PASSWORD
+deploy:
+  provider: script
+  script: poetry publish
+  on:
+    tags: true
+branches:
+  only:
+  - master
+  - /^v\d+\.\d+(\.\d+)?(-\S*)?$/

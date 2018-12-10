@@ -111,7 +111,7 @@ def cli_factory(
                 try:
                     # Best case - server is already up and we successfully
                     # communicate with it,
-                    return _client_strategy(socket_file)
+                    return _run_client(socket_file)
                 except ConnectionRefusedError:
                     logger.warning(
                         'Could not connect to daemon, starting it.')
@@ -129,7 +129,7 @@ def cli_factory(
                 return factory_fn()()
 
             try:
-                return _client_strategy(socket_file)
+                return _run_client(socket_file)
             except ConnectionRefusedError:
                 # Bad case - server came up but we could not communicate with
                 # it.
@@ -208,13 +208,14 @@ def _start_daemon(
         pid_file=pid_file)
 
 
-def _client_strategy(socket_file: Path) -> int:
-    """Get daemon to start process for us, then transfer process context to it.
+def _run_client(socket_file: Path) -> int:
+    """Run command client against daemon listening at provided `socket_file`.
 
     Process context includes:
     - environment
     - cwd
     - command line
+    - file descriptors for stdin/out/err
 
     Raises:
         ConnectionRefusedError if server is not listening/available.

@@ -79,7 +79,7 @@ def test_daemon_not_creating_pid_file_raises_exception():
     # And the daemon has been stubbed out to not create the pid file
     # When the decorated function is executed
     # Then it should time out waiting for the pid file to be created and raise
-    #  an exception.
+    #  an exception
     ...
 
 
@@ -88,5 +88,16 @@ def test_daemon_not_creating_socket_file_raises_exception():
     # And the daemon has been stubbed out to not create the socket file
     # When the decorated function is executed
     # Then it should time out waiting for the socket file to be created and
-    #  raise an exception.
+    #  raise an exception
+    ...
+
+
+def test_client_receiving_signals_forwards_to_daemon():
+    # Given the daemon is processing a command
+    # And the client receives one of:
+    # - SIGINT
+    # - SIGQUIT
+    # - SIGSTOP
+    # - SIGTERM
+    # Then the same signal should be sent to the process running the command
     ...

@@ -10,7 +10,7 @@ import uuid
 from daemon.pidfile import TimeoutPIDLockFile
 import pytest
 
-from example.daemon.server import run, make_client
+from examples.slow_start import run
 
 
 class UTCFormatter(logging.Formatter):
