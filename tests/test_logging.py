@@ -1,7 +1,7 @@
 import io
 import logging
 
-from examples.slow_start import reset_loggers
+from quicken.logging import reset_loggers
 
 
 def test_logging_stream_override_works():

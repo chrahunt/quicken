@@ -1,49 +1,16 @@
-import os
 import logging.config
-from pathlib import Path
+import os
 import signal
-import sys
-import tempfile
-import time
 import uuid
 
-from daemon.pidfile import TimeoutPIDLockFile
 import pytest
 
-from examples.slow_start import run
+from quicken.server import make_client, run
+from quicken.watch import wait_for_create, wait_for_delete
+
+from .utils import contained_children, isolated_filesystem
 
 
-class UTCFormatter(logging.Formatter):
-    converter = time.gmtime
-
-
-#logging.config.dictConfig({
-#    'version': 1,
-#    'disable_existing_loggers': False,
-#    'formatters': {
-#        'default': {
-#            '()': UTCFormatter,
-#            'format': '#### [{asctime}][{levelname}][{name}]\n    {message}',
-#            'style': '{',
-#        }
-#    },
-#    'handlers': {
-#        'file': {
-#            '()': 'logging.FileHandler',
-#            'level': 'DEBUG',
-#            'filename': 'pytest.log',
-#            'encoding': 'utf-8',
-#            'formatter': 'default',
-#        }
-#    },
-#    'root': {
-#        'handlers': ['file'],
-#        'level': 'DEBUG',
-#    }
-#})
-
-
-#logging.basicConfig(level=logging.DEBUG, filename='logs.log')
 logger = logging.getLogger(__name__)
 
 
@@ -51,67 +18,65 @@ def noop(*_args, **_kwargs):
     pass
 
 
-def daemon_runner(fn, *args, **kwargs):
-    """Run daemonizing function in a compatible way.
+def run_server(*args, **kwargs):
+    """Run `run` in a compatible way.
 
     Requires pytest be invoked with `-s`, otherwise python-daemon fails to dup
     stdin/out/err.
     """
-    pid = os.fork()
-    if pid:
-        os.waitpid(pid, 0)
-    else:
-        # When debugging in PyCharm, closerange takes forever so we replace it
-        # here.
-        os.closerange = noop
-        try:
-            # Stay in the current directory.
-            fn(*args, **kwargs, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, working_directory=os.getcwd())
-        except:
-            logger.exception('Exception running daemon function.')
-            raise
+    # When debugging in PyCharm, closerange takes forever so we replace it
+    # here.
+    os.closerange = noop
+    return run(*args, **kwargs)
 
 
-def wait_for_file(path, timeout, interval=0.01):
-    while timeout > 0:
-        if Path(path).exists():
-            break
-        time.sleep(interval)
-        timeout -= interval
-
-
-@pytest.mark.skip
 def test_daemon_starts():
-    f = TimeoutPIDLockFile('daemon.pid')
-    daemon_runner(run, noop, 'socket', pidfile=f)
-    wait_for_file(f.path, 2)
-    assert Path(f.path).exists()
-    pid = Path(f.path).read_text(encoding='utf-8')
-    os.kill(int(pid), signal.SIGTERM)
+    def noop_request_handler(_sock):
+        pass
+    with isolated_filesystem() as path:
+        pid_file = path / 'daemon.pid'
+        socket_file = path / 'socket'
+        with contained_children():
+            pid = run_server(
+                noop_request_handler, socket_file=socket_file,
+                pid_file=pid_file)
+            assert wait_for_create(pid_file)
+            assert pid_file.exists()
+            pid_from_file = pid_file.read_text(encoding='utf-8')
+            assert str(pid) == pid_from_file.strip()
+            os.kill(pid, signal.SIGTERM)
+            assert wait_for_delete(pid_file)
 
 
 @pytest.mark.skip
 def test_daemon_communicates():
-    logger.debug('test_daemon_communicates()')
-    with tempfile.NamedTemporaryFile() as f:
+    with isolated_filesystem() as path:
         def write_file(handler_sock):
-            data = handler_sock.recv(1024).decode('utf-8')
-            Path(f.name).write_text(data, encoding='utf-8')
-        pidf = TimeoutPIDLockFile('daemon.pid')
-        socket_file = 'socket'
-        daemon_runner(run, write_file, socket_file, pidfile=pidf)
-        wait_for_file(pidf.path, 2)
-        assert Path(pidf.path).exists()
-        pid = Path(pidf.path).read_text(encoding='utf-8')
-        logger.info('Daemon pid: %s', pid)
-        data = str(uuid.uuid4())
-        with client(socket_file) as sock:
-            sock.sendall(data.encode('utf-8'))
-        wait_for_file(f.name, 2)
-        time.sleep(0.5)
-        contents = f.read().decode('utf-8')
-        os.kill(int(pid), signal.SIGTERM)
+            socket_data = handler_sock.recv(1024).decode('utf-8')
+            output_file.write_text(socket_data, encoding='utf-8')
+
+        pid_file = path / 'daemon.pid'
+        socket_file = path / 'socket'
+        output_file = path / 'test.txt'
+        with contained_children():
+            pid = run_server(
+                write_file, socket_file=socket_file, pid_file=pid_file)
+
+            assert wait_for_create(pid_file, 10)
+            assert wait_for_create(socket_file)
+            data = str(uuid.uuid4())
+            with make_client() as sock:
+                sock.connect(str(socket_file))
+                sock.sendall(data.encode('utf-8'))
+            assert wait_for_create(output_file)
+            contents = output_file.read_text(encoding='utf-8')
+            os.kill(pid, signal.SIGTERM)
+            print(f'File exists: {pid_file.exists()}')
+            result = wait_for_delete(pid_file)
+            print(f'File exists: {pid_file.exists()}')
+            print(f'Result: {result}')
     assert contents == data
+
 
 def server_correctly_logs_unhandled_exceptions():
     # Given a bug leading to exception in the handler implementation in daemon/server.py

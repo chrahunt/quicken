@@ -3,6 +3,7 @@
 # TODO: Move unnecessary imports to cli_impl.py and import only when we're
 #  actually running the daemon.
 import logging
+from functools import wraps
 import os
 from pathlib import Path
 import signal
@@ -60,6 +61,7 @@ def cli_factory(
           the function.
     """
     def inner_cli_factory(factory_fn: CliFactoryT) -> NoneFunctionT:
+        @wraps(factory_fn)
         def run_cli() -> Optional[int]:
             """
             Returns:
@@ -68,14 +70,14 @@ def cli_factory(
             """
             nonlocal log_file, pid_file, socket_file
 
-            if bypass_daemon():
+            if bypass_daemon and bypass_daemon():
                 logger.debug('Bypassing daemon')
                 return factory_fn()()
 
             if pid_file is None:
                 pid_file = Path(os.environ['HOME']) / f'.daemon-{name}.pid'
 
-            if reload_daemon():
+            if reload_daemon and reload_daemon():
                 logger.debug('Reloading daemon')
                 # Retrieve the pid of the existing daemon.
                 try:
@@ -107,14 +109,20 @@ def cli_factory(
                 socket_file = Path(os.environ['HOME']) / f'.daemon-sock-{name}'
 
             # If the socket file exists then try to communicate with the server.
-            if socket_file.exists():
-                try:
-                    # Best case - server is already up and we successfully
-                    # communicate with it,
-                    return _run_client(socket_file)
-                except ConnectionRefusedError:
-                    logger.warning(
-                        'Could not connect to daemon, starting it.')
+            try:
+                # Best case - server is already up and we successfully
+                # communicate with it,
+                return _run_client(socket_file)
+            except FileNotFoundError:
+                # Server not up, no problem, we'll try to start it.
+                logger.debug(
+                    'Server not up, starting it.')
+            except ConnectionRefusedError:
+                # Server may have died unexpectedly.
+                logger.warning(
+                    'Could not connect to daemon, starting it.')
+                # Clean up the socket file before proceeding.
+                socket_file.unlink()
 
             if log_file is None:
                 log_file = Path(os.environ['HOME']) / f'.daemon-{name}.log'
@@ -154,32 +162,30 @@ def _get_server_callback(callback: NoneFunctionT) -> RequestCallbackT:
 
         logger.debug('Received message %s, num fds: %s', msglen, len(fds))
 
-        if len(fds) != 3:
-            logger.error('Received unexpected number of fds.')
-            # TODO: Determine good exit code to use and return that instead.
-            return
+        assert len(fds) == 3, f'Received unexpected number of fds: {len(fds)}'
         stdin = os.fdopen(fds[0])
         stdout = os.fdopen(fds[1], 'w')
         stderr = os.fdopen(fds[2], 'w')
+        logger.debug('Reset loggers')
         reset_loggers(stdout, stderr)
         sys.stdin = stdin
         sys.stdout = stdout
         sys.stderr = stderr
 
-        logger.debug('Reset loggers')
-        sock.sendall(f'{os.getpid()}'.encode('ascii'))
+        sock.sendall(str(os.getpid()).encode('ascii'))
         contents = b''
         while len(contents) != msglen:
             contents += sock.recv(4096)
         state = deserialize_state(contents)
         os.chdir(state['cwd'])
+        os.umask(state['umask'])
         os.environ = state['env']
         sys.argv = state['argv']
 
-        rc = callback()
-        if rc is None:
-            rc = 0
-        sock.sendall(f'{rc}'.encode('ascii'))
+        return_code = callback()
+        if return_code is None:
+            return_code = 0
+        sock.sendall(str(return_code).encode('ascii'))
 
     return server_callback
 
@@ -220,7 +226,7 @@ def _run_client(socket_file: Path) -> int:
     Raises:
         ConnectionRefusedError if server is not listening/available.
     """
-    logger.debug('client_strategy()')
+    logger.debug('_run_client()')
 
     with make_client() as sock:
         sock.connect(str(socket_file))

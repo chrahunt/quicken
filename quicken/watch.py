@@ -1,56 +1,57 @@
-import fcntl
-import os
+from collections import namedtuple
 from pathlib import Path
 import signal
-from typing import Callable
+
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+
+Action = namedtuple('Action', 'path present')
 
 
 def wait_for_create(path: Path, timeout: float = 5) -> bool:
-    return _wait_for(path, lambda: path.exists(), timeout)
+    return _wait_for(Action(path, True), timeout)
 
 
 def wait_for_delete(path: Path, timeout: float = 5) -> bool:
-    return _wait_for(path, lambda: not path.exists(), timeout)
+    return _wait_for(Action(path, False), timeout)
 
 
-def _wait_for(
-        path: Path, predicate: Callable[[], bool], timeout: float = 5) -> bool:
+def _wait_for(action: Action, timeout: float = 5) -> bool:
     """
     Args:
         path
         timeout
     """
-    waiting = True
-    success = False
+    def action_check():
+        return action.path.exists() == action.present
 
-    fd = os.open(path.parent, os.O_RDONLY)
-    fcntl.fcntl(fd, fcntl.F_SETSIG, 0)
-    fcntl.fcntl(
-        fd, fcntl.F_NOTIFY,
-        fcntl.DN_MODIFY | fcntl.DN_CREATE | fcntl.DN_MULTISHOT)
+    # Sanity check.
+    if action_check():
+        return True
 
-    def file_handler(_signum, _frame):
-        nonlocal success, waiting
-        if predicate():
-            # Test passed.
-            success = True
-            waiting = False
-    signal.signal(signal.SIGIO, file_handler)
+    class Handler(FileSystemEventHandler):
+        def on_deleted(self, _event):
+            if action_check():
+                observer.stop()
+
+        def on_created(self, _event):
+            if action_check():
+                observer.stop()
+
+    observer = Observer()
+    observer.schedule(Handler(), str(action.path.parent))
 
     def timeout_handler(_signum, _frame):
-        nonlocal waiting
-        waiting = False
+        observer.stop()
+
     signal.signal(signal.SIGALRM, timeout_handler)
-
     signal.setitimer(signal.ITIMER_REAL, timeout)
-    # Wait for signals.
-    while waiting:
-        signal.pause()
 
-    # Clean up.
+    observer.start()
+    observer.join()
+
     signal.setitimer(signal.ITIMER_REAL, 0)
-    signal.signal(signal.SIGIO, signal.SIG_DFL)
     signal.signal(signal.SIGALRM, signal.SIG_DFL)
-    os.close(fd)
 
-    return success
+    return action_check()
