@@ -36,7 +36,7 @@ def cli_factory(
         bypass_daemon: Optional[Union[BoolProvider, bool]] = None,
         reload_daemon: Optional[Union[BoolProvider, bool]] = None,
         ) -> CliFactoryDecoratorT:
-    """Decorator to mark a function that provides the main script entrypoint.
+    """Decorator to mark a function that provides the main script entry point.
 
     To benefit most from the daemon speedup, you must do required imports
     within the factory function itself and then have the returned function
@@ -44,21 +44,21 @@ def cli_factory(
     on e.g. environment/cwd.
 
     If any imported top-level modules make use of environment then they must be
-    reconfigured on invokation of the cli, otherwise the environment of the
+    reconfigured on invocation of the cli, otherwise the environment of the
     client will not be taken into account.
 
     Args:
-        name the name used for the socket file.
-        log_file optional log file used by the server, must be absolute path
-          since the server is moved to /. Default is ~/.daemon-{name}.log.
-        pid_file optional pid file used by the server, must be absolute path
-          since the server is moved to /. Default is ~/.daemon-{name}.pid.
-        daemon_timeout time in seconds to wait for daemon to start before
-          falling back to executing function normally.
-        bypass_daemon if True then run command directly instead of trying to
-          use daemon.
-        reload_daemon if True then restart the daemon process before executing
-          the function.
+        name: the name used for the socket file.
+        log_file: optional log file used by the server, must be absolute path
+            since the server is moved to `/`. Default is `~/.daemon-{name}.log`.
+        pid_file: optional pid file used by the server, must be absolute path
+            since the server is moved to `/`. Default is `~/.daemon-{name}.pid`.
+        daemon_timeout: time in seconds to wait for daemon to start before
+            falling back to executing function normally.
+        bypass_daemon: if True then run command directly instead of trying to
+            use daemon.
+        reload_daemon: if True then restart the daemon process before executing
+            the function.
     """
     def inner_cli_factory(factory_fn: CliFactoryT) -> NoneFunctionT:
         @wraps(factory_fn)
@@ -66,7 +66,7 @@ def cli_factory(
             """
             Returns:
                 Result from function or remote execution, suitable for passing
-                to sys.exit().
+                to :func:`sys.exit`.
             """
             nonlocal log_file, pid_file, socket_file
 
@@ -103,7 +103,7 @@ def cli_factory(
                         if not wait_for_delete(pid_file, daemon_stop_timeout):
                             raise RuntimeError(
                                 f'Daemon reload failed, pid file {pid_file}'
-                                 ' still present.')
+                                ' still present.')
 
             if socket_file is None:
                 socket_file = Path(os.environ['HOME']) / f'.daemon-sock-{name}'

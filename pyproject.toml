@@ -16,6 +16,9 @@ watchdog = "^0.9.0"
 pytest = "^3.0"
 pylint = "^2.2"
 psutil = "^5.4"
+coverage = "^4.5"
+sphinx = "^1.8"
+sphinx_autodoc_typehints = "^1.5"
 
 [build-system]
 requires = ["poetry>=0.12"]
