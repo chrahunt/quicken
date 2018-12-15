@@ -1,9 +1,9 @@
 from contextlib import contextmanager
+import copy
 import logging
 import logging.config
 import os
 from pathlib import Path
-import signal
 import tempfile
 import time
 from typing import Any, ContextManager
@@ -29,6 +29,30 @@ def isolated_filesystem() -> ContextManager[Path]:
 
 
 @contextmanager
+def env(**kwargs) -> ContextManager:
+    """Update environment within context manager.
+    """
+    def update(target, source):
+        updated = {}
+        for k, v in source.items():
+            if v is None:
+                try:
+                    updated[k] = target.pop(k)
+                except KeyError:
+                    pass
+            else:
+                updated[k] = target.get(k, None)
+                target[k] = v
+        return updated
+
+    previous_env = update(os.environ, kwargs)
+    try:
+        yield
+    finally:
+        update(os.environ, previous_env)
+
+
+@contextmanager
 def patch_attribute(obj: Any, attr: str, new_attr: Any):
     """Patch attribute on an object then revert.
     """
@@ -40,10 +64,6 @@ def patch_attribute(obj: Any, attr: str, new_attr: Any):
     finally:
         setattr(obj, attr, old_attr)
 
-
-def waitpid():
-    """waitpid implementation that works for non-child processes.
-    """
 
 @contextmanager
 def contained_children(timeout=1) -> ContextManager:
@@ -65,13 +85,25 @@ def setup_logging() -> None:
     class UTCFormatter(logging.Formatter):
         converter = time.gmtime
 
+    class TestNameAdderFilter(logging.Filter):
+        def filter(self, record):
+            record.test_name = os.environ['PYTEST_CURRENT_TEST']
+            record.pid = os.getpid()
+            return True
+
     logging.config.dictConfig({
         'version': 1,
-        'disable_existing_loggers': False,
+        'disable_existing_loggers': True,
+        'filters': {
+            'test_name': {
+                '()': TestNameAdderFilter,
+                'name': 'test_name',
+            },
+        },
         'formatters': {
             'default': {
                 '()': UTCFormatter,
-                'format': '#### [{asctime}][{levelname}][{name}]\n    {message}',
+                'format': '#### [{asctime}][{levelname}][{pid}][{test_name}->{name}]\n    {message}',
                 'style': '{',
             }
         },
@@ -80,11 +112,13 @@ def setup_logging() -> None:
                 '()': 'logging.FileHandler',
                 'level': 'DEBUG',
                 'filename': 'pytest.log',
+                'filters': ['test_name'],
                 'encoding': 'utf-8',
                 'formatter': 'default',
             }
         },
         'root': {
+            'filters': ['test_name'],
             'handlers': ['file'],
             'level': 'DEBUG',
         }

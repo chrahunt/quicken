@@ -1,8 +1,15 @@
+import logging
 import os
 
 from quicken import cli_factory
 
-from .utils import contained_children, isolated_filesystem
+from .utils import contained_children, isolated_filesystem, setup_logging
+
+
+setup_logging()
+
+
+logger = logging.getLogger(__name__)
 
 
 def test_function_is_run_using_daemon():
@@ -21,7 +28,9 @@ def test_function_is_run_using_daemon():
         output_file = path / 'test.txt'
 
         with contained_children():
+            logger.debug('Before runner')
             assert runner() == 0
+            logger.debug('After runner')
             current_pid = str(os.getpid())
             test_pid = output_file.read_text(encoding='utf-8')
             assert test_pid.strip() != current_pid
@@ -155,4 +164,11 @@ def test_daemon_runner_fails_when_communicating_to_stopped_server():
     # When the decorated function is executed.
     # Then the client should not hang, and should time out or throw a connection
     #  refused error.
+    ...
+
+
+def test_daemon_uses_runtime_path():
+    # Given a function decorated with `runtime_path` provided as an argument.
+    #
+    # When the decorated function is executed.
     ...

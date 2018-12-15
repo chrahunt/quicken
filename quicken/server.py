@@ -15,6 +15,9 @@ import daemon
 import daemon.daemon
 from pid import PidFile
 
+from .constants import pid_file_name, socket_name
+from .xdg import RuntimeDir
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,30 +25,31 @@ logger = logging.getLogger(__name__)
 RequestCallbackT = Callable[[socket.socket], None]
 
 
-def _get_request_handler(callback: RequestCallbackT):
-    class RequestHandler(socketserver.BaseRequestHandler):
-        def handle(self):
-            logger.debug('handle()')
-            callback(self.request)
-    return RequestHandler
+def _run_server(callback: RequestCallbackT) -> None:
+    """Start server that provides requests to `callback`.
 
+    Method must be invoked when cwd is suitable for secure creation of files.
 
-class _ForkingUnixServer(
-        socketserver.ForkingMixIn, socketserver.UnixStreamServer):
-    def server_close(self):
-        logger.info('Graceful shutdown')
+    If no exceptions are raised then this method exits.
 
+    Args:
+        callback:
+    """
+    logger.debug('_run_server()')
 
-def _run_server(callback: RequestCallbackT, socket_file: Path):
-    logger.debug('run_server()')
+    def get_request_handler():
+        class RequestHandler(socketserver.BaseRequestHandler):
+            def handle(self):
+                logger.debug('handle()')
+                callback(self.request)
+        return RequestHandler
 
-    def cleanup():
-        if socket_file.exists():
-            socket_file.unlink()
-    cleanup()
+    class ForkingUnixServer(
+            socketserver.ForkingMixIn, socketserver.UnixStreamServer):
+        def server_close(self):
+            logger.info('Graceful shutdown')
 
     def shutdown():
-        # Graceful shutdown.
         if server:
             server.shutdown()
 
@@ -59,19 +63,15 @@ def _run_server(callback: RequestCallbackT, socket_file: Path):
 
     server = None
     signal.signal(signal.SIGTERM, signal_handler)
-    try:
-        with tempfile.TemporaryDirectory(dir=socket_file.parent) as p:
-            # Create temporary file and move to final location to prevent
-            # race condition on socket file creation.
-            temp_socket_file = Path(p) / 'socket'
-            server = _ForkingUnixServer(
-                str(temp_socket_file), _get_request_handler(callback))
-            os.rename(str(temp_socket_file), str(socket_file))
-        server.serve_forever()
-    finally:
-        cleanup()
-        # noinspection PyProtectedMember
-        os._exit(0)
+    with tempfile.TemporaryDirectory(dir='.') as p:
+        # If the server creates the socket file in-place then the waiting
+        # client may use it before the server has called `bind` and
+        # `listen`. To avoid this race condition we create a temporary file
+        # and then rename, which is atomic.
+        temp_socket_name = f'{p}/socket'
+        server = ForkingUnixServer(temp_socket_name, get_request_handler())
+        os.rename(temp_socket_name, socket_name)
+    server.serve_forever()
 
 
 def _configure_logging(logfile: Path, loglevel: str) -> None:
@@ -130,17 +130,16 @@ def _detach_process_context() -> int:
 
 
 def run(
-        callback: RequestCallbackT, socket_file: Path,
-        log_file: Optional[Path] = None,
-        pid_file: Optional[Path] = None) -> int:
+        callback: RequestCallbackT,
+        runtime_dir: RuntimeDir,
+        log_file: Optional[Path] = None) -> int:
     """Exposed function for running the daemon.
 
     Args:
-        callback function invoked on each request with the socket
-        socket_file for client/server communication - will be removed if it
-            exists
-        log_file used for server-side logging
-        pid_file passed to daemon
+        callback: function invoked on each request with the socket
+        runtime_dir: directory for holding socket/pid file and used as the
+            working directory for the server.
+        log_file: used for server-side logging
     Raises:
         Same as `open` for log file issues
     """
@@ -157,16 +156,25 @@ def run(
 
     # XXX: We may want to validate the callback here, or just leave it to
     #  the caller.
-    # TODO: Validate socket file/pid file as acceptable - otherwise error gets
-    #  raised in daemon which is harder to identify.
-
     ctx = daemon.DaemonContext()
     # We handle detaching.
     ctx.detach_process = False
-    ctx.pidfile = PidFile(pid_file.name, piddir=str(pid_file.parent))
 
-    # Preserve file opened for logging.
-    ctx.files_preserve = [logger.handlers[0].stream.fileno()]
+    # This ensures that relative files are created in the context of the actual
+    # runtime dir and not at the path that happens to exist at the time.
+    ctx.working_directory = runtime_dir.fileno()
+    # The owner of the pidfile is the only one that can do any operations within
+    # the runtime directory.
+    ctx.pidfile = PidFile(pid_file_name, piddir='.')
+
+    ctx.files_preserve = [
+        # Keep runtime directory open.
+        runtime_dir.fileno(),
+    ]
+
+    if log_file:
+        # Preserve file opened for logging.
+        ctx.files_preserve.append(logger.handlers[0].stream.fileno())
 
     # Secure umask by default.
     ctx.umask = 0o077
@@ -207,7 +215,7 @@ def run(
     daemon.daemon.close_all_open_files = patched_close_all_open_files
     try:
         with ctx:
-            _run_server(callback, socket_file)
+            _run_server(callback)
     except:
         logger.exception('Daemon exception')
         raise
@@ -219,6 +227,8 @@ def run(
 
 @contextmanager
 def make_client() -> ContextManager[socket.socket]:
+    """Create socket with attributes appropriate for server communication.
+    """
     logger.debug('make_client()')
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         yield sock

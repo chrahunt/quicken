@@ -11,12 +11,14 @@ import socket
 import sys
 from typing import Callable, Optional, Union
 
-from .server import make_client, RequestCallbackT, run
+from .constants import socket_name, pid_file_name
 from .fd import max_pid_len, recv_fds, send_fds
 from .logging import reset_loggers
 from .protocol import serialize_state, deserialize_state
+from .server import make_client, RequestCallbackT, run
 from .types import CliFactoryT, NoneFunctionT
 from .watch import wait_for_create, wait_for_delete
+from .xdg import BoundPath, RuntimeDir
 
 
 logger = logging.getLogger(__name__)
@@ -28,9 +30,8 @@ BoolProvider = Callable[[], bool]
 
 def cli_factory(
         name: str,
-        socket_file: Optional[str] = None,
+        runtime_dir_path: Optional[str] = None,
         log_file: Optional[str] = None,
-        pid_file: Optional[str] = None,
         daemon_start_timeout: float = 5.0,
         daemon_stop_timeout: float = 2.0,
         bypass_daemon: Optional[Union[BoolProvider, bool]] = None,
@@ -49,16 +50,25 @@ def cli_factory(
 
     Args:
         name: the name used for the socket file.
+        runtime_dir_path: the directory used for the socket and pid file. If not
+            provided then we fall back to:
+            `$XDG_RUNTIME_DIR/quicken-{name}` or `$TMPDIR/quicken-{name}-{uid}`
+            or `/tmp/quicken-{name}-{uid}`. If the directory exists it must be
+            owned by the current user and have permissions 700.
         log_file: optional log file used by the server, must be absolute path
             since the server is moved to `/`. Default is `~/.daemon-{name}.log`.
-        pid_file: optional pid file used by the server, must be absolute path
-            since the server is moved to `/`. Default is `~/.daemon-{name}.pid`.
-        daemon_timeout: time in seconds to wait for daemon to start before
+        daemon_start_timeout: time in seconds to wait for daemon to start before
+            falling back to executing function normally.
+        daemon_stop_timeout: time in seconds to wait for daemon to start before
             falling back to executing function normally.
         bypass_daemon: if True then run command directly instead of trying to
             use daemon.
         reload_daemon: if True then restart the daemon process before executing
             the function.
+
+    Throws:
+        QuickenError: If any directory used by runtime_dir does not have the
+            correct permissions.
     """
     def inner_cli_factory(factory_fn: CliFactoryT) -> NoneFunctionT:
         @wraps(factory_fn)
@@ -68,14 +78,14 @@ def cli_factory(
                 Result from function or remote execution, suitable for passing
                 to :func:`sys.exit`.
             """
-            nonlocal log_file, pid_file, socket_file
+            nonlocal log_file
 
             if bypass_daemon and bypass_daemon():
                 logger.debug('Bypassing daemon')
                 return factory_fn()()
 
-            if pid_file is None:
-                pid_file = Path(os.environ['HOME']) / f'.daemon-{name}.pid'
+            runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
+            pid_file = runtime_dir.path(pid_file_name)
 
             if reload_daemon and reload_daemon():
                 logger.debug('Reloading daemon')
@@ -91,7 +101,6 @@ def cli_factory(
                         f' {pid_file}')
                     raise
                 else:
-                    # Send sigterm to the daemon.
                     try:
                         os.kill(pid, signal.SIGTERM)
                     except ProcessLookupError:
@@ -105,8 +114,7 @@ def cli_factory(
                                 f'Daemon reload failed, pid file {pid_file}'
                                 ' still present.')
 
-            if socket_file is None:
-                socket_file = Path(os.environ['HOME']) / f'.daemon-sock-{name}'
+            socket_file = runtime_dir.path(socket_name)
 
             # If the socket file exists then try to communicate with the server.
             try:
@@ -128,9 +136,11 @@ def cli_factory(
                 log_file = Path(os.environ['HOME']) / f'.daemon-{name}.log'
 
             # OK case - server is not up, so we start it.
-            _start_daemon(factory_fn, socket_file, log_file, pid_file)
+            # TODO: Wait for daemon death since it can happen quickly and
+            #  sends SIGCHLD even though daemon does setsid.
+            _start_daemon(factory_fn, runtime_dir, log_file)
 
-            if not wait_for_create(Path(socket_file), daemon_start_timeout):
+            if not wait_for_create(socket_file, daemon_start_timeout):
                 # Bad case - timed out waiting for server startup.
                 logger.warning(
                     'Timeout waiting for daemon - executing cli directly.')
@@ -166,7 +176,6 @@ def _get_server_callback(callback: NoneFunctionT) -> RequestCallbackT:
         stdin = os.fdopen(fds[0])
         stdout = os.fdopen(fds[1], 'w')
         stderr = os.fdopen(fds[2], 'w')
-        logger.debug('Reset loggers')
         reset_loggers(stdout, stderr)
         sys.stdin = stdin
         sys.stdout = stdout
@@ -191,30 +200,23 @@ def _get_server_callback(callback: NoneFunctionT) -> RequestCallbackT:
 
 
 def _start_daemon(
-        factory_fn: CliFactoryT, socket_file: Path, log_file: Path,
-        pid_file: Path) -> None:
+        factory_fn: CliFactoryT, runtime_dir: RuntimeDir,
+        log_file: Path) -> None:
     """Start daemon process.
-
-    Args:
-        factory_fn
-        socket_file
-        log_file
-        pid_file
 
     Returns:
         This function only returns in the original process, and exits
         internally in the daemon process.
     """
-    logger.debug('start_daemon()')
+    logger.debug('_start_daemon()')
     # We don't get any benefit the first time we're starting the daemon, so we
     # get the cli function in the parent process to avoid having to look in
     # the server log for errors.
     cli = factory_fn()
-    run(_get_server_callback(cli), socket_file=socket_file, log_file=log_file,
-        pid_file=pid_file)
+    run(_get_server_callback(cli), log_file=log_file, runtime_dir=runtime_dir)
 
 
-def _run_client(socket_file: Path) -> int:
+def _run_client(socket_file: BoundPath) -> int:
     """Run command client against daemon listening at provided `socket_file`.
 
     Process context includes:
@@ -229,7 +231,9 @@ def _run_client(socket_file: Path) -> int:
     logger.debug('_run_client()')
 
     with make_client() as sock:
-        sock.connect(str(socket_file))
+        # Use bound path to prevent running command against socket owned by
+        # other user, or which was created after-the-fact.
+        socket_file.pass_to(lambda p: sock.connect(str(p)))
         state = serialize_state()
         send_fds(
             sock, f'{len(state)}'.encode('ascii'),

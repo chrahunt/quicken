@@ -5,8 +5,10 @@ import uuid
 
 import pytest
 
+from quicken.constants import pid_file_name, socket_name
 from quicken.server import make_client, run
 from quicken.watch import wait_for_create, wait_for_delete
+from quicken.xdg import RuntimeDir
 
 from .utils import contained_children, isolated_filesystem
 
@@ -34,12 +36,11 @@ def test_daemon_starts():
     def noop_request_handler(_sock):
         pass
     with isolated_filesystem() as path:
-        pid_file = path / 'daemon.pid'
-        socket_file = path / 'socket'
+        runtime_dir = RuntimeDir(dir_path=path)
+        pid_file = runtime_dir.path(pid_file_name)
         with contained_children():
             pid = run_server(
-                noop_request_handler, socket_file=socket_file,
-                pid_file=pid_file)
+                noop_request_handler, runtime_dir=runtime_dir)
             assert wait_for_create(pid_file)
             assert pid_file.exists()
             pid_from_file = pid_file.read_text(encoding='utf-8')
@@ -55,26 +56,23 @@ def test_daemon_communicates():
             socket_data = handler_sock.recv(1024).decode('utf-8')
             output_file.write_text(socket_data, encoding='utf-8')
 
-        pid_file = path / 'daemon.pid'
-        socket_file = path / 'socket'
-        output_file = path / 'test.txt'
+        runtime_dir = RuntimeDir(dir_path=path)
+        output_file = runtime_dir.path('output.txt')
+        pid_file = runtime_dir.path(pid_file_name)
+        socket_file = runtime_dir.path(socket_name)
         with contained_children():
-            pid = run_server(
-                write_file, socket_file=socket_file, pid_file=pid_file)
+            pid = run_server(write_file, runtime_dir=runtime_dir)
 
             assert wait_for_create(pid_file, 10)
             assert wait_for_create(socket_file)
             data = str(uuid.uuid4())
             with make_client() as sock:
-                sock.connect(str(socket_file))
+                socket_file.pass_to(lambda p: sock.connect(str(p)))
                 sock.sendall(data.encode('utf-8'))
             assert wait_for_create(output_file)
             contents = output_file.read_text(encoding='utf-8')
             os.kill(pid, signal.SIGTERM)
-            print(f'File exists: {pid_file.exists()}')
-            result = wait_for_delete(pid_file)
-            print(f'File exists: {pid_file.exists()}')
-            print(f'Result: {result}')
+            assert wait_for_delete(pid_file)
     assert contents == data
 
 
