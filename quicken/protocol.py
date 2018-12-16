@@ -26,8 +26,8 @@ def serialize_state() -> bytes:
     # - umask (as string)
     # - k=v for k, v in os.environ
     args = []
-    args.append(str(len(sys.argv) - 1))
-    args.extend(sys.argv[1:])
+    args.append(str(len(sys.argv)))
+    args.extend(sys.argv)
     args.append(os.getcwd())
     # Only way to get umask is to set umask.
     umask = os.umask(0o077)

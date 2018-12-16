@@ -6,10 +6,12 @@ import logging
 from functools import wraps
 import os
 from pathlib import Path
-import signal
 import socket
 import sys
 from typing import Callable, Optional, Union
+
+from pid import PidFile, PidFileAlreadyLockedError, PidFileAlreadyRunningError
+from psutil import NoSuchProcess, Process, TimeoutExpired
 
 from .constants import socket_name, pid_file_name
 from .fd import max_pid_len, recv_fds, send_fds
@@ -17,8 +19,8 @@ from .logging import reset_loggers
 from .protocol import serialize_state, deserialize_state
 from .server import make_client, RequestCallbackT, run
 from .types import CliFactoryT, NoneFunctionT
-from .watch import wait_for_create, wait_for_delete
-from .xdg import BoundPath, RuntimeDir
+from .watch import wait_for_create
+from .xdg import BoundPath, chdir, RuntimeDir
 
 
 logger = logging.getLogger(__name__)
@@ -85,34 +87,10 @@ def cli_factory(
                 return factory_fn()()
 
             runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
-            pid_file = runtime_dir.path(pid_file_name)
 
             if reload_daemon and reload_daemon():
                 logger.debug('Reloading daemon')
-                # Retrieve the pid of the existing daemon.
-                try:
-                    pid = int(pid_file.read_text(encoding='utf-8'))
-                except FileNotFoundError:
-                    logger.debug(
-                        'Daemon reload requested but file not found, ignoring.')
-                except OSError:
-                    logger.exception(
-                        'Daemon reload failed - could not get pid from'
-                        f' {pid_file}')
-                    raise
-                else:
-                    try:
-                        os.kill(pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        logger.debug(
-                            f'Daemon with pid {pid} does not exist, removing'
-                            f' pid file {pid_file}.')
-                        pid_file.unlink()
-                    else:
-                        if not wait_for_delete(pid_file, daemon_stop_timeout):
-                            raise RuntimeError(
-                                f'Daemon reload failed, pid file {pid_file}'
-                                ' still present.')
+                _kill_daemon(runtime_dir, daemon_stop_timeout)
 
             socket_file = runtime_dir.path(socket_name)
 
@@ -159,6 +137,82 @@ def cli_factory(
         return run_cli
 
     return inner_cli_factory
+
+
+def _kill_daemon(runtime_dir: RuntimeDir, timeout: float) -> None:
+    """Kill existing daemon process (if any).
+    """
+    # To prevent inadvertently killing an innocent process, we take
+    # the following precautions:
+    # 1. Assume existing process is daemon only if the pid file is locked.
+    # 2. Ensure the pid in the pid file is the same before and after the check.
+    # 3. Use psutil.Process which shrinks window for race after second check and
+    #    before kill by ensuring the pid has not been reused (saves creation time).
+    # If the pid has changed before/after the check then some other process has
+    # come in and replaced the process before us.
+    # TODO: Lock this across processes.
+    pid_file = runtime_dir.path(pid_file_name)
+    # Retrieve the pid of the existing daemon.
+    try:
+        pid = int(pid_file.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        logger.debug(
+            'Daemon reload requested but file not found, ignoring.')
+        return
+    except OSError:
+        logger.exception(
+            'Daemon reload failed - could not get pid from'
+            f' {pid_file}')
+        raise
+
+    try:
+        process = Process(pid=pid)
+    except NoSuchProcess:
+        logger.debug(
+            f'Daemon reload requested but process with pid {pid}'
+            ' does not exist.')
+        pid_file.unlink()
+        return
+
+    # To ensure this is the same process, see if the pid file is locked.
+    with chdir(pid_file.dir):
+        try:
+            with PidFile(pid_file_name, piddir='.'):
+                pid_file.unlink()
+                logger.debug(
+                    'Daemon reload requested but pid file was not locked')
+            return
+        except PidFileAlreadyLockedError:
+            pass
+        except PidFileAlreadyRunningError:
+            # Process with the same pid happens to be up, but there's no lock
+            # so no problem.
+            pid_file.unlink()
+            return
+
+    try:
+        pid_2 = int(pid_file.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        logger.debug(
+            'Daemon reload requested but file has already been cleaned up.')
+        return
+    except OSError:
+        logger.exception(
+            'Daemon reload failed - could not confirm pid from'
+            f' {pid_file}')
+        raise
+
+    if pid == pid_2:
+        process.terminate()
+        try:
+            process.wait(timeout)
+            # Process should clean up after itself.
+        except TimeoutExpired:
+            # TODO: Reduce number of edge cases in this condition.
+            raise
+    else:
+        raise RuntimeError(
+            'Other daemon process has started when we were checking reload')
 
 
 def _get_server_callback(callback: NoneFunctionT) -> RequestCallbackT:
@@ -232,7 +286,7 @@ def _run_client(socket_file: BoundPath) -> int:
 
     with make_client() as sock:
         # Use bound path to prevent running command against socket owned by
-        # other user, or which was created after-the-fact.
+        # other user, or one which was created after-the-fact.
         socket_file.pass_to(lambda p: sock.connect(str(p)))
         state = serialize_state()
         send_fds(

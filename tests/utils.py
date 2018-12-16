@@ -1,12 +1,13 @@
 from contextlib import contextmanager
-import copy
 import logging
 import logging.config
 import os
 from pathlib import Path
+import re
+import sys
 import tempfile
 import time
-from typing import Any, ContextManager
+from typing import Any, ContextManager, List
 
 import psutil
 
@@ -53,6 +54,16 @@ def env(**kwargs) -> ContextManager:
 
 
 @contextmanager
+def argv(args: List[str]) -> ContextManager:
+    argv = sys.argv
+    sys.argv = args
+    try:
+        yield
+    finally:
+        sys.argv = argv
+
+
+@contextmanager
 def patch_attribute(obj: Any, attr: str, new_attr: Any):
     """Patch attribute on an object then revert.
     """
@@ -79,6 +90,15 @@ def contained_children(timeout=1) -> ContextManager:
         gone, alive = psutil.wait_procs(procs, timeout=timeout)
         for p in alive:
             p.kill()
+
+
+_name_re = re.compile(r'(?P<file>.+?)::(?P<name>.+?) \(.*\)$')
+def current_test_name():
+    name = os.environ['PYTEST_CURRENT_TEST']
+    m = _name_re.match(name)
+    if not m:
+        raise RuntimeError(f'Could not extract name from {name}')
+    return m.group('name')
 
 
 def setup_logging() -> None:
