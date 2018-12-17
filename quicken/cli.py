@@ -10,16 +10,11 @@ import socket
 import sys
 from typing import Callable, Optional, Union
 
-from pid import PidFile, PidFileAlreadyLockedError, PidFileAlreadyRunningError
-from psutil import NoSuchProcess, Process, TimeoutExpired
-
 from .constants import socket_name, pid_file_name
 from .fd import max_pid_len, recv_fds, send_fds
 from .logging import reset_loggers
 from .protocol import serialize_state, deserialize_state
-from .server import make_client, RequestCallbackT, run
 from .types import CliFactoryT, NoneFunctionT
-from .watch import wait_for_create
 from .xdg import BoundPath, chdir, RuntimeDir
 
 
@@ -118,12 +113,6 @@ def cli_factory(
             #  sends SIGCHLD even though daemon does setsid.
             _start_daemon(factory_fn, runtime_dir, log_file)
 
-            if not wait_for_create(socket_file, daemon_start_timeout):
-                # Bad case - timed out waiting for server startup.
-                logger.warning(
-                    'Timeout waiting for daemon - executing cli directly.')
-                return factory_fn()()
-
             try:
                 return _run_client(socket_file)
             except ConnectionRefusedError:
@@ -151,6 +140,8 @@ def _kill_daemon(runtime_dir: RuntimeDir, timeout: float) -> None:
     # If the pid has changed before/after the check then some other process has
     # come in and replaced the process before us.
     # TODO: Lock this across processes.
+    from pid import PidFile, PidFileAlreadyLockedError, PidFileAlreadyRunningError
+    from psutil import NoSuchProcess, Process, TimeoutExpired
     pid_file = runtime_dir.path(pid_file_name)
     # Retrieve the pid of the existing daemon.
     try:
@@ -215,7 +206,7 @@ def _kill_daemon(runtime_dir: RuntimeDir, timeout: float) -> None:
             'Other daemon process has started when we were checking reload')
 
 
-def _get_server_callback(callback: NoneFunctionT) -> RequestCallbackT:
+def _get_server_callback(callback: NoneFunctionT):
     """Return the actual callback function invoked on request, which does
     negotiation and environment setup by communicating with the client."""
     def server_callback(sock: socket.socket) -> None:
@@ -266,7 +257,11 @@ def _start_daemon(
     # We don't get any benefit the first time we're starting the daemon, so we
     # get the cli function in the parent process to avoid having to look in
     # the server log for errors.
+    # TODO: Execute after detaching from process since this may open required
+    #  files for e.g. logging, or specify that such things need to be accounted
+    #  for and not done.
     cli = factory_fn()
+    from .server import run
     run(_get_server_callback(cli), log_file=log_file, runtime_dir=runtime_dir)
 
 
@@ -284,7 +279,7 @@ def _run_client(socket_file: BoundPath) -> int:
     """
     logger.debug('_run_client()')
 
-    with make_client() as sock:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         # Use bound path to prevent running command against socket owned by
         # other user, or one which was created after-the-fact.
         socket_file.pass_to(lambda p: sock.connect(str(p)))

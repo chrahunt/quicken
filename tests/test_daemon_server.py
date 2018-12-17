@@ -1,12 +1,13 @@
 import logging.config
 import os
 import signal
+import socket
 import uuid
 
 import pytest
 
 from quicken.constants import pid_file_name, socket_name
-from quicken.server import make_client, run
+from quicken.server import run
 from quicken.watch import wait_for_create, wait_for_delete
 from quicken.xdg import RuntimeDir
 
@@ -66,7 +67,8 @@ def test_daemon_communicates():
             assert wait_for_create(pid_file, 10)
             assert wait_for_create(socket_file)
             data = str(uuid.uuid4())
-            with make_client() as sock:
+
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 socket_file.pass_to(lambda p: sock.connect(str(p)))
                 sock.sendall(data.encode('utf-8'))
             assert wait_for_create(output_file)

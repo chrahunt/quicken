@@ -1,15 +1,18 @@
-from contextlib import contextmanager
+import functools
 import logging
 import logging.config
+from multiprocessing import Pipe, Process
+from multiprocessing.connection import Connection, wait
 import os
 from pathlib import Path
 import signal
 import socket
 import socketserver
+import sys
 import tempfile
 import threading
 import time
-from typing import Callable, ContextManager, Optional
+from typing import Callable, Dict, Optional
 
 import daemon
 import daemon.daemon
@@ -25,52 +28,247 @@ logger = logging.getLogger(__name__)
 RequestCallbackT = Callable[[socket.socket], None]
 
 
-def _run_server(callback: RequestCallbackT) -> None:
+def run(
+        callback: RequestCallbackT,
+        runtime_dir: RuntimeDir,
+        log_file: Optional[Path] = None) -> int:
+    """Start the server in the background.
+
+    The function returns only when the server has successfully started.
+
+    Args:
+        callback: function invoked on each request
+        runtime_dir: directory for holding socket/pid file and used as the
+            working directory for the server
+        log_file: used for server-side logging
+    Returns:
+        pid of new process
+    Raises:
+        Same as `open` for log file issues
+        If there are any issues starting the server errors are re-raised.
+    """
+    logger.debug('run()')
+
+    daemon_options = {
+        # This ensures that relative files are created in the context of the
+        # actual runtime dir and not at the path that happens to exist at the
+        # time.
+        'working_directory': runtime_dir.fileno(),
+        # The owner of the pidfile is the only one that can do any operations
+        # within the runtime directory.
+        'pidfile': PidFile(pid_file_name, piddir='.'),
+        # Keep runtime directory open.
+        'files_preserve': [runtime_dir.fileno()],
+    }
+
+    target = functools.partial(_run_server, callback)
+    daemon = Daemon(target, daemon_options, log_file)
+    return daemon.start()
+
+
+class Daemon:
+    def __init__(self, target, daemon_options: Dict, log_file=None):
+        self._target = target
+        self._daemon_options = daemon_options
+        self._log_file = log_file
+        self._patch()
+
+    @staticmethod
+    def _patch():
+        """Any required patches.
+        """
+        close_all_open_files = daemon.daemon.close_all_open_files
+        # TODO: Upstream into python-daemon, see open PRs here:
+        #  - https://pagure.io/python-daemon/pull-requests
+        # TODO: Speed up close by relying on platform-specific speedup
+        #  implementations, see:
+        #  - AIX: fcntl.F_CLOSEM: https://bugs.python.org/issue1607087
+        #  - Solaris: closefrom: https://bugs.python.org/issue1663329
+        #  or alternatively don't close any file descriptors at all since
+        #  Python by default sets O_CLOEXEC
+        def patched_close_all_open_files(exclude=None):
+            # For now just bypass so we don't close the fd used for
+            # communicating state back in multiprocess.Process.
+            return
+            # Specific to Linux.
+            fd_dir = Path('/proc/self/fd')
+            if fd_dir.exists():
+                # We shouldn't need much optimization here, as the parent
+                # process is not expected to do more than import required
+                # libraries.
+                for fd in (int(p.stem) for p in fd_dir.iterdir()):
+                    if fd in exclude:
+                        continue
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        # Best effort.
+                        pass
+            else:
+                # XXX: Part of the ctx.open sequence executes `os.closerange`
+                #  which can take significantly longer when running under a
+                #  debugger or `strace`.
+                close_all_open_files(exclude)
+
+        daemon.daemon.close_all_open_files = patched_close_all_open_files
+
+    def start(self, start_timeout=None) -> int:
+        """Run daemon.
+
+        Returns:
+            pid of new process
+        Raises:
+            any exception from the child process
+        """
+        conn1, conn2 = Pipe()
+        #p = Process(target=self._dummy)
+        p = Process(target=self._run, args=(conn1, self._target))
+        p.start()
+        ready = wait([p.sentinel, conn2], timeout=start_timeout)
+        # Timeout
+        if not ready:
+            p.kill()
+            raise RuntimeError('Timeout starting process')
+        if len(ready) == 2:
+            # Process died and we have some data available.
+            error = conn2.recv()
+            if not error:
+                # Process died but no error.
+                raise RuntimeError(
+                    f'Process died with return code {p.exitcode}')
+            from tblib import pickling_support
+            pickling_support.install()
+            _, exception, tb = conn2.recv()
+            # Re-raise exception.
+            raise exception.with_traceback(tb)
+        value = ready[0]
+        if value == p.sentinel:
+            # Process died but without sending a response.
+            raise RuntimeError(
+                f'Process died with return code {p.exitcode}')
+        else:
+            # Process responded.
+            error = conn2.recv()
+            if not error:
+                # No problems, assume process is up and ready.
+                return p.pid
+            from tblib import pickling_support
+            pickling_support.install()
+            _, exception, tb = conn2.recv()
+            # Re-raise exception but not before killing process.
+            p.kill()
+            raise exception.with_traceback(tb)
+
+    def _run(self, conn: Connection, callback):
+        """
+
+        Args:
+            conn:
+            callback:
+
+        Returns:
+
+        """
+        def done():
+            conn.send(False)
+        try:
+            # Pass detach_process to avoid exception within python-daemon when
+            # it tries to access stdin.
+            ctx = daemon.DaemonContext(detach_process=False)
+            for k, v in self._daemon_options.items():
+                setattr(ctx, k, v)
+
+            # We handle detaching (multiprocessing.Process + setsid())
+            ctx.detach_process = False
+
+            # Secure umask by default.
+            ctx.umask = 0o077
+
+            # Keep connection alive.
+            ctx.files_preserve.append(conn.fileno())
+
+            self._detach_process_context()
+
+            with ctx:
+                if self._log_file:
+                    _configure_logging(self._log_file, loglevel='DEBUG')
+                callback(done)
+        except:
+            conn.send(True)
+            from tblib import pickling_support
+            pickling_support.install()
+            conn.send(sys.exc_info())
+            # Wait for signal from parent process to avoid exit/read race
+            # condition.
+            conn.recv()
+            sys.exit(1)
+
+    @staticmethod
+    def _detach_process_context():
+        """Re-implement detach from python-daemon to keep the original parent
+        alive.
+
+        This is necessary so that we can transparently invoke the actual command
+        when the server comes up.
+        """
+        # We are already being invoked inside a child process (
+        # multiprocessing.Process).
+        # setsid to prevent getting killed with the rest of our parent process
+        # group.
+        os.setsid()
+        # We omit the second fork here since it doesn't really matter if the
+        # daemon has a controlling terminal and it makes testing easier.
+
+
+def _run_server(callback: RequestCallbackT, done) -> None:
     """Start server that provides requests to `callback`.
 
     Method must be invoked when cwd is suitable for secure creation of files.
 
-    If no exceptions are raised then this method exits.
-
     Args:
-        callback:
+        callback: the callback function invoked on each request
+        done: callback function invoked after setup and before we start handling
+            requests
     """
     logger.debug('_run_server()')
 
-    def get_request_handler():
-        class RequestHandler(socketserver.BaseRequestHandler):
-            def handle(self):
-                logger.debug('handle()')
-                callback(self.request)
-        return RequestHandler
+    # XXX: We may want to validate the callback here, or just leave it to
+    #  the caller.
+
+    class RequestHandler(socketserver.BaseRequestHandler):
+        def handle(self):
+            logger.debug('handle()')
+            callback(self.request)
 
     class ForkingUnixServer(
             socketserver.ForkingMixIn, socketserver.UnixStreamServer):
-        def server_close(self):
-            logger.info('Graceful shutdown')
+        pass
+
+    # If the server creates the socket file in-place then the waiting
+    # client may use it before the server has called `bind` and
+    # `listen`. To avoid this race condition we create a temporary file
+    # and then rename, which is atomic.
+    with tempfile.TemporaryDirectory(dir='.') as p:
+        temp_socket_name = f'{p}/socket'
+        server = ForkingUnixServer(temp_socket_name, RequestHandler)
+        os.rename(temp_socket_name, socket_name)
 
     def shutdown():
-        if server:
-            server.shutdown()
+        server.shutdown()
 
     def signal_handler(sig, _frame):
         logger.debug(f'Received signal: {sig}')
-        # Our socketserver is single-threaded, and server.shutdown() blocks, so
-        # we need another thread to actually invoke shutdown otherwise we
-        # deadlock.
+        # Our server is single-threaded, and server.shutdown() blocks, so we
+        # need another thread to actually invoke shutdown otherwise we deadlock.
         t = threading.Thread(target=shutdown, daemon=True)
         t.start()
 
-    server = None
+    # Gracefully shut down if we get sigterm.
     signal.signal(signal.SIGTERM, signal_handler)
-    with tempfile.TemporaryDirectory(dir='.') as p:
-        # If the server creates the socket file in-place then the waiting
-        # client may use it before the server has called `bind` and
-        # `listen`. To avoid this race condition we create a temporary file
-        # and then rename, which is atomic.
-        temp_socket_name = f'{p}/socket'
-        server = ForkingUnixServer(temp_socket_name, get_request_handler())
-        os.rename(temp_socket_name, socket_name)
+
+    # Signal OK before handling requests.
+    done()
+
     server.serve_forever()
 
 
@@ -109,126 +307,3 @@ def _configure_logging(logfile: Path, loglevel: str) -> None:
         },
     })
     logger.info('Logging configured')
-
-
-def _detach_process_context() -> int:
-    """
-    Re-implement detach from python-daemon to keep the original parent alive.
-    This is necessary so that we can transparently invoke the actual command
-    when the server comes up.
-
-    Returns:
-        pid of detached process (0 in child)
-    """
-    pid = os.fork()
-    if pid:
-        return pid
-    os.setsid()
-    # We omit the second fork here since it doesn't really matter if the daemon
-    # has a controlling terminal and it makes testing easier.
-    return 0
-
-
-def run(
-        callback: RequestCallbackT,
-        runtime_dir: RuntimeDir,
-        log_file: Optional[Path] = None) -> int:
-    """Exposed function for running the daemon.
-
-    Args:
-        callback: function invoked on each request with the socket
-        runtime_dir: directory for holding socket/pid file and used as the
-            working directory for the server.
-        log_file: used for server-side logging
-    Raises:
-        Same as `open` for log file issues
-    """
-    logger.debug('run()')
-
-    # In general we try to perform any required validation outside the daemon
-    # since it is more difficult to debug inside (especially if logging is
-    # mis-configured).
-
-    # Configure file logging right before detaching so any errors above would
-    # be throw and be traced as expected (in the parent process).
-    if log_file:
-        _configure_logging(log_file, loglevel='DEBUG')
-
-    # XXX: We may want to validate the callback here, or just leave it to
-    #  the caller.
-    ctx = daemon.DaemonContext()
-    # We handle detaching.
-    ctx.detach_process = False
-
-    # This ensures that relative files are created in the context of the actual
-    # runtime dir and not at the path that happens to exist at the time.
-    ctx.working_directory = runtime_dir.fileno()
-    # The owner of the pidfile is the only one that can do any operations within
-    # the runtime directory.
-    ctx.pidfile = PidFile(pid_file_name, piddir='.')
-
-    ctx.files_preserve = [
-        # Keep runtime directory open.
-        runtime_dir.fileno(),
-    ]
-
-    if log_file:
-        # Preserve file opened for logging.
-        ctx.files_preserve.append(logger.handlers[0].stream.fileno())
-
-    # Secure umask by default.
-    ctx.umask = 0o077
-
-    pid = _detach_process_context()
-    if pid:
-        return pid
-
-    close_all_open_files = daemon.daemon.close_all_open_files
-    # TODO: Upstream into python-daemon, see open PRs here:
-    #  - https://pagure.io/python-daemon/pull-requests
-    # TODO: Speed up close by relying on platform-specific speedup
-    #  implementations, see:
-    #  - AIX: fcntl.F_CLOSEM: https://bugs.python.org/issue1607087
-    #  - Solaris: closefrom: https://bugs.python.org/issue1663329
-    #  or alternatively don't close any file descriptors at all since
-    #  Python by default sets O_CLOEXEC
-    def patched_close_all_open_files(exclude=None):
-        # Specific to Linux.
-        fd_dir = Path('/proc/self/fd')
-        if fd_dir.exists():
-            # We shouldn't need much optimization here, as the parent process is
-            # not expected to do more than import required libraries.
-            for fd in (int(p.stem) for p in fd_dir.iterdir()):
-                if fd in exclude:
-                    continue
-                try:
-                    os.close(fd)
-                except OSError:
-                    # Best effort.
-                    pass
-        else:
-            # XXX: Part of the ctx.open sequence executes `os.closerange` which
-            #  can take significantly longer when running under a debugger or
-            #  `strace`.
-            close_all_open_files(exclude)
-
-    daemon.daemon.close_all_open_files = patched_close_all_open_files
-    try:
-        with ctx:
-            _run_server(callback)
-    except:
-        logger.exception('Daemon exception')
-        raise
-    finally:
-        # Prevent returning to caller.
-        # noinspection PyProtectedMember
-        os._exit(1)
-
-
-@contextmanager
-def make_client() -> ContextManager[socket.socket]:
-    """Create socket with attributes appropriate for server communication.
-    """
-    logger.debug('make_client()')
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        yield sock
