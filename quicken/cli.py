@@ -31,6 +31,7 @@ def cli_factory(
         log_file: Optional[str] = None,
         daemon_start_timeout: float = 5.0,
         daemon_stop_timeout: float = 2.0,
+        server_idle_timeout: Optional[float] = None,
         bypass_daemon: Optional[Union[BoolProvider, bool]] = None,
         reload_daemon: Optional[Union[BoolProvider, bool]] = None,
         ) -> CliFactoryDecoratorT:
@@ -58,6 +59,8 @@ def cli_factory(
             falling back to executing function normally.
         daemon_stop_timeout: time in seconds to wait for daemon to start before
             falling back to executing function normally.
+        server_idle_timeout: if provided then the server will shut down after
+            this long with no active requests (in seconds).
         bypass_daemon: if True then run command directly instead of trying to
             use daemon.
         reload_daemon: if True then restart the daemon process before executing
@@ -111,7 +114,8 @@ def cli_factory(
             # OK case - server is not up, so we start it.
             # TODO: Wait for daemon death since it can happen quickly and
             #  sends SIGCHLD even though daemon does setsid.
-            _start_daemon(factory_fn, runtime_dir, log_file)
+            _start_daemon(
+                factory_fn, runtime_dir, log_file, server_idle_timeout)
 
             try:
                 return _run_client(socket_file)
@@ -136,11 +140,13 @@ def _kill_daemon(runtime_dir: RuntimeDir, timeout: float) -> None:
     # 1. Assume existing process is daemon only if the pid file is locked.
     # 2. Ensure the pid in the pid file is the same before and after the check.
     # 3. Use psutil.Process which shrinks window for race after second check and
-    #    before kill by ensuring the pid has not been reused (saves creation time).
+    #    before kill by ensuring the pid has not been reused (saves creation
+    #    time).
     # If the pid has changed before/after the check then some other process has
     # come in and replaced the process before us.
     # TODO: Lock this across processes.
-    from pid import PidFile, PidFileAlreadyLockedError, PidFileAlreadyRunningError
+    from pid import (
+        PidFile, PidFileAlreadyLockedError, PidFileAlreadyRunningError)
     from psutil import NoSuchProcess, Process, TimeoutExpired
     pid_file = runtime_dir.path(pid_file_name)
     # Retrieve the pid of the existing daemon.
@@ -246,7 +252,7 @@ def _get_server_callback(callback: NoneFunctionT):
 
 def _start_daemon(
         factory_fn: CliFactoryT, runtime_dir: RuntimeDir,
-        log_file: Path) -> None:
+        log_file: Path, server_idle_timeout: Optional[float]) -> None:
     """Start daemon process.
 
     Returns:
@@ -262,7 +268,9 @@ def _start_daemon(
     #  for and not done.
     cli = factory_fn()
     from .server import run
-    run(_get_server_callback(cli), log_file=log_file, runtime_dir=runtime_dir)
+    run(
+        _get_server_callback(cli), log_file=log_file, runtime_dir=runtime_dir,
+        server_idle_timeout=server_idle_timeout)
 
 
 def _run_client(socket_file: BoundPath) -> int:

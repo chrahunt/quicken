@@ -3,6 +3,7 @@ import logging
 from multiprocessing import Process, Pipe
 import os
 import sys
+import time
 
 from quicken import cli_factory
 from quicken.constants import pid_file_name
@@ -172,6 +173,82 @@ def test_client_receiving_signals_forwards_to_daemon():
     # - SIGTERM
     # Then the same signal should be sent to the process running the command
     ...
+
+
+def test_server_idle_timeout_is_respected():
+    # Given the decorated function is initialized with an idle timeout of 100ms
+    # When the decorated function is invoked
+    # And again after 50ms
+    # And again after 50ms
+    # Then each request should be handled by the same server
+    # And the server should shut down 100ms after the last request
+    with isolated_filesystem() as path:
+        idle_timeout = 0.1
+        @cli_factory(
+            current_test_name(), runtime_dir_path=path,
+            server_idle_timeout=idle_timeout)
+        def runner():
+            def inner():
+                text = str(os.getppid())
+                output_file.write_text(text, encoding='utf-8')
+                return 0
+            return inner
+
+        output_file = path / 'test.txt'
+
+        with contained_children():
+            main_pid = str(os.getpid())
+            assert runner() == 0
+            first_parent_pid = output_file.read_text(encoding='utf-8')
+            for _i in range(3):
+                time.sleep(0.05)
+                assert runner() == 0
+                parent_pid = output_file.read_text(encoding='utf-8')
+                assert parent_pid == first_parent_pid
+                assert parent_pid != main_pid
+            time.sleep(idle_timeout * 2)
+            assert runner() == 0
+            parent_pid = output_file.read_text(encoding='utf-8')
+            assert parent_pid != first_parent_pid
+            assert parent_pid != main_pid
+
+
+def test_server_idle_timeout_acknowledges_active_children():
+    # Given the decorated function is initialized with an idle timeout of 100ms
+    # And the decorated function takes 200ms to execute
+    # When the decorated function is invoked
+    # And again after 250ms
+    # Then both requests should be handled by the same server
+    # And the server should shut down 100ms after the last request
+    with isolated_filesystem() as path:
+        idle_timeout = 0.1
+        @cli_factory(
+            current_test_name(), runtime_dir_path=path,
+            server_idle_timeout=idle_timeout)
+        def runner():
+            def inner():
+                text = str(time.time())
+                time.sleep(idle_timeout * 2)
+                text += f' {os.getppid()}'
+                output_file.write_text(text, encoding='utf-8')
+                return 0
+            return inner
+
+        output_file = path / 'test.txt'
+
+        with contained_children():
+            main_pid = str(os.getpid())
+            assert runner() == 0
+            t, first_parent_pid = output_file.read_text(encoding='utf-8').split()
+            assert first_parent_pid != main_pid
+            now = time.time()
+            # Within 10% of the idle timeout.
+            assert idle_timeout * 2 - (now - float(t)) < 0.1 * idle_timeout
+            time.sleep(idle_timeout * 0.5)
+            assert runner() == 0
+            _, parent_pid = output_file.read_text(encoding='utf-8').split()
+            assert parent_pid != main_pid
+            assert parent_pid == first_parent_pid
 
 
 def test_stale_pid_file_is_ok():
