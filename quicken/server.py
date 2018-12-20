@@ -31,6 +31,7 @@ RequestCallbackT = Callable[[socket.socket], None]
 def run(
         callback: RequestCallbackT,
         runtime_dir: RuntimeDir,
+        server_idle_timeout: Optional[float] = None,
         log_file: Optional[Path] = None) -> int:
     """Start the server in the background.
 
@@ -40,6 +41,8 @@ def run(
         callback: function invoked on each request
         runtime_dir: directory for holding socket/pid file and used as the
             working directory for the server
+        server_idle_timeout: timeout after which server will shutdown if no
+            active requests
         log_file: used for server-side logging
     Returns:
         pid of new process
@@ -61,7 +64,7 @@ def run(
         'files_preserve': [runtime_dir.fileno()],
     }
 
-    target = functools.partial(_run_server, callback)
+    target = functools.partial(_run_server, callback, server_idle_timeout)
     daemon = Daemon(target, daemon_options, log_file)
     return daemon.start()
 
@@ -220,13 +223,17 @@ class Daemon:
         # daemon has a controlling terminal and it makes testing easier.
 
 
-def _run_server(callback: RequestCallbackT, done) -> None:
+def _run_server(
+        callback: RequestCallbackT,
+        server_idle_timeout: Optional[float], done) -> None:
     """Start server that provides requests to `callback`.
 
     Method must be invoked when cwd is suitable for secure creation of files.
 
     Args:
         callback: the callback function invoked on each request
+        server_idle_timeout: timeout after which the server will stop
+            automatically
         done: callback function invoked after setup and before we start handling
             requests
     """
@@ -242,7 +249,22 @@ def _run_server(callback: RequestCallbackT, done) -> None:
 
     class ForkingUnixServer(
             socketserver.ForkingMixIn, socketserver.UnixStreamServer):
-        pass
+        def __init__(self, *args, **kwargs):
+            socketserver.UnixStreamServer.__init__(self, *args, **kwargs)
+            self._last_active_time = time.monotonic()
+
+        def service_actions(self):
+            """Shutdown server if timeout has been reached.
+            """
+            # Extend.
+            super().service_actions()
+            if server_idle_timeout is None:
+                return
+            now = time.monotonic()
+            if self.active_children:
+                self._last_active_time = now
+            elif now - self._last_active_time >= server_idle_timeout:
+                shutdown()
 
     # If the server creates the socket file in-place then the waiting
     # client may use it before the server has called `bind` and
@@ -253,15 +275,21 @@ def _run_server(callback: RequestCallbackT, done) -> None:
         server = ForkingUnixServer(temp_socket_name, RequestHandler)
         os.rename(temp_socket_name, socket_name)
 
+    # The following activities can cause server shutdown:
+    # 1. Signal
+    # 2. Idle timeout
     def shutdown():
-        server.shutdown()
+        def inner_shutdown():
+            os.unlink(socket_name)
+            server.shutdown()
+        t = threading.Thread(target=inner_shutdown, daemon=True)
+        t.start()
 
     def signal_handler(sig, _frame):
         logger.debug(f'Received signal: {sig}')
         # Our server is single-threaded, and server.shutdown() blocks, so we
         # need another thread to actually invoke shutdown otherwise we deadlock.
-        t = threading.Thread(target=shutdown, daemon=True)
-        t.start()
+        shutdown()
 
     # Gracefully shut down if we get sigterm.
     signal.signal(signal.SIGTERM, signal_handler)
@@ -269,7 +297,9 @@ def _run_server(callback: RequestCallbackT, done) -> None:
     # Signal OK before handling requests.
     done()
 
-    server.serve_forever()
+    # 10 ms granularity for shutdown/idle timeout
+    interval = 0.01
+    server.serve_forever(interval)
 
 
 def _configure_logging(logfile: Path, loglevel: str) -> None:
