@@ -1,10 +1,12 @@
 [tool.poetry]
 name = "quicken"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Make Python apps fast."
 authors = ["Chris Hunt <chrahunt@gmail.com>"]
 license = "MIT"
 readme = "README.md"
+homepage = "https://github.com/chrahunt/quicken"
+repository = "https://github.com/chrahunt/quicken"
 
 [tool.poetry.dependencies]
 python = "^3.7"
