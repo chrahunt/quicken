@@ -1,0 +1,43 @@
+trigger:
+- master
+
+jobs:
+
+- job: Pipeline
+  pool:
+    vmImage: 'Ubuntu-16.04'
+  strategy:
+    matrix:
+      Python37:
+        python.version: '3.7'
+    maxParallel: 4
+
+  steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '$(python.version)'
+      architecture: 'x64'
+
+  - script: |
+      pip install poetry
+      poetry install
+    displayName: 'Install dependencies'
+
+  - script: 'poetry run pytest -s --junitxml=junit/test-results.xml tests'
+    displayName: Run tests
+
+  - task: PublishTestResults@2
+    inputs:
+      testResultsFiles: '**/test-results.xml'
+      testRunTitle: 'Python $(python.version)'
+    condition: succeededOrFailed()
+    displayName: Publish test results
+
+  - script: poetry build
+    displayName: Build
+  
+  - task: PublishPipelineArtifact@0
+    inputs:
+      artifactName: artifacts
+      targetPath: dist/
+    displayName: Publish artifacts
