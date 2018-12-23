@@ -1,6 +1,6 @@
 import json
 import logging
-from multiprocessing import Process, Pipe
+from multiprocessing import active_children, Process, Pipe
 import os
 import sys
 import time
@@ -471,3 +471,34 @@ def test_daemon_runner_fails_when_communicating_to_stopped_server():
     # Then the client should not hang, and should time out or throw a connection
     #  refused error.
     ...
+
+
+def test_command_does_not_hang_on_first_invocation():
+    # Given a function decorated with cli_factory
+    # When the function is executed
+    # Then multiprocessing.active_children will not have any members
+    # And when the function is executed again it will have the same ppid
+    with isolated_filesystem() as path:
+        @cli_factory(current_test_name())
+        def runner():
+            def inner():
+                text = str(os.getppid())
+                output_file.write_text(text, encoding='utf-8')
+                return 0
+            return inner
+
+        output_file = path / 'test.txt'
+
+        with contained_children():
+            main_pid = str(os.getpid())
+            assert runner() == 0
+            parent_pid_1 = output_file.read_text(
+                encoding='utf-8').strip().split()
+            assert parent_pid_1 != main_pid
+            assert not active_children(), 'No active children should be present'
+
+            assert runner() == 0
+            parent_pid_2 = output_file.read_text(
+                encoding='utf-8').strip().split()
+            assert parent_pid_2 != main_pid
+            assert parent_pid_1 == parent_pid_2

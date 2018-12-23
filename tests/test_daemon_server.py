@@ -33,6 +33,7 @@ def run_server(*args, **kwargs):
     return run(*args, **kwargs)
 
 
+@pytest.mark.skip
 def test_daemon_starts():
     def noop_request_handler(_sock):
         pass
