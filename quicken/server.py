@@ -32,7 +32,7 @@ def run(
         callback: RequestCallbackT,
         runtime_dir: RuntimeDir,
         server_idle_timeout: Optional[float] = None,
-        log_file: Optional[Path] = None) -> int:
+        log_file: Optional[Path] = None):
     """Start the server in the background.
 
     The function returns only when the server has successfully started.
@@ -44,8 +44,6 @@ def run(
         server_idle_timeout: timeout after which server will shutdown if no
             active requests
         log_file: used for server-side logging
-    Returns:
-        pid of new process
     Raises:
         Same as `open` for log file issues
         If there are any issues starting the server errors are re-raised.
@@ -65,11 +63,11 @@ def run(
     }
 
     target = functools.partial(_run_server, callback, server_idle_timeout)
-    daemon = Daemon(target, daemon_options, log_file)
-    return daemon.start()
+    daemon = _Daemon(target, daemon_options, log_file)
+    daemon.start()
 
 
-class Daemon:
+class _Daemon:
     def __init__(self, target, daemon_options: Dict, log_file=None):
         self._target = target
         self._daemon_options = daemon_options
@@ -115,52 +113,43 @@ class Daemon:
 
         daemon.daemon.close_all_open_files = patched_close_all_open_files
 
-    def start(self, start_timeout=None) -> int:
+    def start(self, start_timeout=None):
         """Run daemon.
 
-        Returns:
-            pid of new process
         Raises:
             any exception from the child process
         """
-        conn1, conn2 = Pipe()
-        #p = Process(target=self._dummy)
-        p = Process(target=self._run, args=(conn1, self._target))
+        child_pipe, parent_pipe = Pipe()
+        p = Process(target=self._run, args=(child_pipe, self._target))
         p.start()
-        ready = wait([p.sentinel, conn2], timeout=start_timeout)
+        ready = wait([p.sentinel, parent_pipe], timeout=start_timeout)
+
         # Timeout
         if not ready:
             p.kill()
             raise RuntimeError('Timeout starting process')
-        if len(ready) == 2:
-            # Process died and we have some data available.
-            error = conn2.recv()
-            if not error:
-                # Process died but no error.
-                raise RuntimeError(
-                    f'Process died with return code {p.exitcode}')
-            from tblib import pickling_support
-            pickling_support.install()
-            _, exception, tb = conn2.recv()
-            # Re-raise exception.
-            raise exception.with_traceback(tb)
-        value = ready[0]
-        if value == p.sentinel:
-            # Process died but without sending a response.
-            raise RuntimeError(
-                f'Process died with return code {p.exitcode}')
-        else:
-            # Process responded.
-            error = conn2.recv()
-            if not error:
-                # No problems, assume process is up and ready.
-                return p.pid
-            from tblib import pickling_support
-            pickling_support.install()
-            _, exception, tb = conn2.recv()
-            # Re-raise exception but not before killing process.
-            p.kill()
-            raise exception.with_traceback(tb)
+
+        exc = None
+        if parent_pipe in ready:
+            error = parent_pipe.recv()
+            if error:
+                from tblib import pickling_support
+                pickling_support.install()
+                _, exception, tb = parent_pipe.recv()
+                # Re-raise exception.
+                exc = exception.with_traceback(tb)
+
+        if p.sentinel in ready:
+            if p.exitcode:
+                if not exc:
+                    exc = RuntimeError(
+                        f'Process died with return code {p.exitcode}')
+        elif not exc:
+            parent_pipe.send(True)
+            p.join()
+
+        if exc:
+            raise exc
 
     def _run(self, conn: Connection, callback):
         """
@@ -174,9 +163,30 @@ class Daemon:
         """
         def done():
             conn.send(False)
+            # Fork to detach from multiprocessing child management.
+            pid = os.fork()
+            if pid:
+                pidfile = self._daemon_options['pidfile']
+                # TODO: Need higher-level locking to prevent race conditions on
+                #  reading/writing the pidfile.
+                # Update pidfile with the actual pid.
+                fh = pidfile.fh
+                fh.seek(0)
+                fh.truncate()
+                ctx.pidfile.pid = pid
+                fh.write(f'{pid}\n')
+                fh.flush()
+                os.fsync(fh.fileno())
+                fh.seek(0)
+                # Ensure we don't return to caller.
+                os._exit(0)
+            # Close sentinel in grandchild, just to keep things clean.
+            #os.close(current_process().sentinel)
+
         try:
             # Pass detach_process to avoid exception within python-daemon when
-            # it tries to access stdin.
+            # it tries to access stdin in constructor when detach_process is
+            # set later.
             ctx = daemon.DaemonContext(detach_process=False)
             for k, v in self._daemon_options.items():
                 setattr(ctx, k, v)
@@ -189,6 +199,8 @@ class Daemon:
 
             # Keep connection alive.
             ctx.files_preserve.append(conn.fileno())
+            # This doesn't work, raising a ValueError('process not started')
+            #ctx.files_preserve.append(current_process().sentinel)
 
             self._detach_process_context()
 
@@ -196,6 +208,9 @@ class Daemon:
                 if self._log_file:
                     _configure_logging(self._log_file, loglevel='DEBUG')
                 callback(done)
+        except SystemExit:
+            # Omit processing SystemExit, let it propagate.
+            raise
         except:
             conn.send(True)
             from tblib import pickling_support
@@ -204,7 +219,8 @@ class Daemon:
             # Wait for signal from parent process to avoid exit/read race
             # condition.
             conn.recv()
-            sys.exit(1)
+            # multiprocessing takes care of exit code mapping.
+            raise
 
     @staticmethod
     def _detach_process_context():

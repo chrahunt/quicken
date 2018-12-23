@@ -4,12 +4,18 @@ import logging.config
 import os
 from pathlib import Path
 import re
+import socket
+import socketserver
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, ContextManager, List
+import uuid
 
 import psutil
+
+from quicken.fd import max_pid_len
 
 
 @contextmanager
@@ -76,17 +82,70 @@ def patch_attribute(obj: Any, attr: str, new_attr: Any):
         setattr(obj, attr, old_attr)
 
 
+class ChildManager:
+    """Register children with the eldest parent process.
+
+    We do this instead of recursively getting children because intermediate
+    processes may have already died.
+    """
+    def __init__(self):
+        self._tempdir = tempfile.mkdtemp()
+        self._id = str(uuid.uuid4())
+        self._socket = f'{self._tempdir}/socket'
+        self._mutex = threading.Lock()
+        self._children = []
+        os.register_at_fork(after_in_child=self.after_in_child)
+        self._serve()
+
+    def _serve(self):
+        class Server(
+            socketserver.UnixStreamServer, socketserver.ThreadingMixIn):
+            pass
+
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(_self):
+                pid = int(_self.request.recv(max_pid_len).decode('utf-8'))
+                self.children_append(psutil.Process(pid=pid))
+
+        server = Server(self._socket, Handler)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+
+    def children_append(self, child):
+        with self._mutex:
+            self._children.append(child)
+
+    def children_pop_all(self):
+        with self._mutex:
+            l = self._children
+            self._children = []
+        return l
+
+    def after_in_child(self):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.connect(self._socket)
+            sock.sendall(str(os.getpid()).encode('utf-8'))
+
+
+child_manager = ChildManager()
+
+
 @contextmanager
 def contained_children(timeout=1) -> ContextManager:
-    """Automatically kill any processes forked in this context, for cleanup.
+    """Automatically kill any Python processes forked in this context, for
+    cleanup. Handles any descendents.
+
     Timeout is seconds to wait for graceful termination before killing children.
     """
     try:
         yield
     finally:
-        procs = psutil.Process().children()
+        procs = child_manager.children_pop_all()
         for p in procs:
-            p.terminate()
+            try:
+                p.terminate()
+            except psutil.NoSuchProcess:
+                pass
         gone, alive = psutil.wait_procs(procs, timeout=timeout)
         for p in alive:
             p.kill()
