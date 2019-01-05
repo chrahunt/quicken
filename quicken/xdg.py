@@ -10,6 +10,7 @@ from typing import Any, ContextManager, Union
 @contextmanager
 def chdir(fd: int) -> ContextManager:
     cwd = os.open('.', os.O_RDONLY)
+    # os.chdir is equivalent but PyCharm complains about invalid argument type.
     os.fchdir(fd)
     try:
         yield
@@ -71,7 +72,16 @@ class RuntimeDir:
     - $TMPDIR/{base_name}-{uid}
     - /tmp/{base_name}-{uid}
 
-    Otherwise fails.
+    otherwise `__init__` fails.
+
+    The emphasis here is on securely creating the directory and ensuring its
+    attributes, as well as providing an interface for operating on files in
+    the directory without race conditions.
+
+    If `os.*` unconditionally supported `dir_fd` we would suggest using that,
+    but since this is not available on all platforms we instead use BoundPath,
+    which does chdir to the directory before providing arguments as a relative
+    path.
     """
     def __init__(self, base_name: str = None, dir_path=None):
         """
@@ -94,8 +104,8 @@ class RuntimeDir:
         except FileNotFoundError:
             Path(dir_path).mkdir(mode=0o700)
             self._fd = os.open(dir_path, os.O_RDONLY)
-        # Test after open to avoid toctou, also do not trust mode passed to
-        # mkdir.
+        # Test after open to avoid toctou, also since we do not trust the mode
+        # passed to mkdir.
         result = os.stat(self._fd)
         if not stat.S_ISDIR(result.st_mode):
             raise RuntimeError(f'{dir_path} must be a directory')
@@ -107,7 +117,7 @@ class RuntimeDir:
         # At this point the directory referred to by self._fd is:
         # * owned by the user
         # * has permission 700
-        # unless explicitly changed by the user or root (out of scope).
+        # unless explicitly changed by the user or root.
 
     def fileno(self) -> int:
         return self._fd

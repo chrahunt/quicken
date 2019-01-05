@@ -1,37 +1,84 @@
+from __future__ import annotations
+import copy
+from dataclasses import dataclass
+import io
+import logging
 import os
+from pathlib import Path
 import sys
-from typing import Dict
+from typing import Dict, List
 
 
-def deserialize_state(data: bytes) -> Dict:
-    result = {}
-    args = data.decode('utf-8').split('\x00')
-    argc = int(args[0])
-    result['argv'] = args[1:argc+1]
-    result['cwd'] = args[argc+1]
-    result['umask'] = int(args[argc+2])
-    env = {}
-    for kv in args[argc+3:]:
-        k, v = kv.split('=', 1)
-        env[k] = v
-    result['env'] = env
-    return result
+@dataclass
+class StdStreams:
+    stdin: io.TextIOWrapper
+    stdout: io.TextIOWrapper
+    stderr: io.TextIOWrapper
 
 
-def serialize_state() -> bytes:
-    # all fields separated by null
-    # - argc (as string)
-    # - *argv
-    # - cwd
-    # - umask (as string)
-    # - k=v for k, v in os.environ
-    args = []
-    args.append(str(len(sys.argv)))
-    args.extend(sys.argv)
-    args.append(os.getcwd())
-    # Only way to get umask is to set umask.
-    umask = os.umask(0o077)
-    os.umask(umask)
-    args.append(str(umask))
-    args.extend(f'{k}={v}' for k, v in os.environ.items())
-    return '\x00'.join(args).encode('utf-8')
+@dataclass
+class ProcessState:
+    std_streams: StdStreams
+    cwd: Path
+    umask: int
+    environment: Dict[str, str]
+    argv: List[str]
+
+    @staticmethod
+    def get() -> ProcessState:
+        streams = StdStreams(sys.stdin, sys.stdout, sys.stderr)
+        cwd = Path.cwd()
+        # Only way to get umask is to set umask.
+        umask = os.umask(0o077)
+        os.umask(umask)
+        environ = copy.deepcopy(os.environ)
+        argv = list(sys.argv)
+        return ProcessState(streams, cwd, umask, environ, argv)
+
+    @staticmethod
+    def _reset_loggers(stdout, stderr):
+        def reset_handlers(logger):
+            for h in logger.handlers:
+                if isinstance(h, logging.StreamHandler):
+                    # Check if using stdout/stderr in underlying stream and call
+                    # setStream if so.
+                    # XXX: Use setStream in Python 3.7
+                    if h.stream == sys.stdout:
+                        h.stream = stdout
+                    elif h.stream == sys.stderr:
+                        h.stream = stderr
+        # For 'manager' property.
+        # noinspection PyUnresolvedReferences
+        loggers = logging.Logger.manager.loggerDict
+        for _, item in loggers.items():
+            if isinstance(item, logging.PlaceHolder):
+                # These don't have their own handlers.
+                continue
+            reset_handlers(item)
+        reset_handlers(logging.getLogger())
+
+    @staticmethod
+    def set(state: ProcessState):
+        streams = state.std_streams
+        __class__._reset_loggers(streams.stdout, streams.stderr)
+        os.chdir(str(state.cwd))
+        os.umask(state.umask)
+        os.environ = copy.deepcopy(state.environment)
+        sys.argv = list(state.argv)
+
+
+@dataclass
+class RunProcess:
+    details: ProcessState
+
+
+@dataclass
+class RunProcessResult:
+    returncode: int
+
+
+@dataclass
+class ServerState:
+    start_time: float
+    pid: int
+    context: Dict[str, str]

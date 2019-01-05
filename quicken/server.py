@@ -1,24 +1,39 @@
+"""
+Command execution server process.
+
+| Server process |   | forkserver |
+
+client    server
+
+run -------
+client -> server
+
+To allow use of any callable in the server we override the forkserver
+implementation and do not
+"""
+import asyncio
+from contextlib import ExitStack
 import functools
 import logging
 import logging.config
+import multiprocessing
 from multiprocessing import Pipe, Process
-from multiprocessing.connection import Connection, wait
+from multiprocessing.connection import Listener, wait
 import os
 from pathlib import Path
 import signal
 import socket
-import socketserver
 import sys
-import tempfile
 import threading
 import time
-from typing import Callable, Dict, Optional
+import traceback
+from typing import Callable, Dict, Optional, NoReturn
 
 import daemon
 import daemon.daemon
-from pid import PidFile
 
-from .constants import pid_file_name, socket_name
+from ._asyncio import DeadlineTimer, ProcessExecutor
+from .constants import socket_name
 from .xdg import RuntimeDir
 
 
@@ -29,7 +44,7 @@ RequestCallbackT = Callable[[socket.socket], None]
 
 
 def run(
-        callback: RequestCallbackT,
+        socket_handler: RequestCallbackT,
         runtime_dir: RuntimeDir,
         server_idle_timeout: Optional[float] = None,
         log_file: Optional[Path] = None):
@@ -38,7 +53,7 @@ def run(
     The function returns only when the server has successfully started.
 
     Args:
-        callback: function invoked on each request
+        socket_handler: function invoked on each request
         runtime_dir: directory for holding socket/pid file and used as the
             working directory for the server
         server_idle_timeout: timeout after which server will shutdown if no
@@ -57,17 +72,157 @@ def run(
         'working_directory': runtime_dir.fileno(),
         # The owner of the pidfile is the only one that can do any operations
         # within the runtime directory.
-        'pidfile': PidFile(pid_file_name, piddir='.'),
+        #'pidfile': PidFile(pid_file_name, piddir='.'),
         # Keep runtime directory open.
         'files_preserve': [runtime_dir.fileno()],
     }
 
-    target = functools.partial(_run_server, callback, server_idle_timeout)
+    target = functools.partial(_run_server, socket_handler, server_idle_timeout)
     daemon = _Daemon(target, daemon_options, log_file)
     daemon.start()
 
 
+class TimeoutError(Exception):
+    pass
+
+
+def apply_process(target, name=None, args=(), kwargs=None, timeout=None):
+    """Run provided target in a multiprocessing.Process.
+
+    This function does not require that the `target` and arguments
+    are picklable. Only the return value of `target` must be.
+
+    Args:
+        target: same as multiprocessing.Process
+        name: same as multiprocessing.Process
+        args: same as multiprocessing.Process
+        kwargs: same as multiprocessing.Process
+        timeout: seconds after which processing will be aborted and
+            the child process killed
+
+    Returns:
+        The return value of `target`
+
+    Raises:
+        *: Any exception raised by `target`.
+        TimeoutError: If a timeout occurs.
+    """
+    if not kwargs:
+        kwargs = {}
+
+    def runner():
+        try:
+            result = target(*args, **kwargs)
+            child_pipe.send(False)
+            # XXX: What if an exception happens here?
+            child_pipe.send(result)
+            child_pipe.recv()
+        except:
+            child_pipe.send(True)
+            from tblib import pickling_support
+            pickling_support.install()
+            child_pipe.send(sys.exc_info())
+            # Wait for signal from parent process to avoid exit/read race
+            # condition.
+            child_pipe.recv()
+            raise
+
+    ctx = multiprocessing.get_context('fork')
+
+    child_pipe, parent_pipe = ctx.Pipe()
+    p = ctx.Process(target=runner, name=name)
+    p.start()
+
+    ready = wait([p.sentinel, parent_pipe], timeout=timeout)
+
+    # Timeout
+    if not ready:
+        p.kill()
+        raise TimeoutError('Timeout running function.')
+
+    exc = None
+    result = None
+    if parent_pipe in ready:
+        error = parent_pipe.recv()
+        if error:
+            from tblib import pickling_support
+            pickling_support.install()
+            _, exception, tb = parent_pipe.recv()
+            exc = exception.with_traceback(tb)
+        else:
+            result = parent_pipe.recv()
+
+    if p.sentinel in ready:
+        # This can happen if the child process closes file descriptors, but we
+        # do not handle it.
+        assert p.exitcode is not None, 'Exit code must exist'
+        if p.exitcode:
+            if not exc:
+                exc = RuntimeError(
+                    f'Process died with return code {p.exitcode}')
+
+    else:
+        # Indicate OK to continue.
+        parent_pipe.send(True)
+        p.join()
+
+    if exc:
+        raise exc
+    return result
+
+
+def run_in_daemon(target, daemon_options: Dict, log_file=None):
+    def patch_python_daemon():
+        # We don't want to close any open files right now since we
+        # cannot distinguish between the ones we want to keep and
+        # those we do not. For our use case there should not be
+        # many opened files anyway.
+        def patched(exclude=None):
+            return
+        daemon.daemon.close_all_open_files = patched
+
+    patch_python_daemon()
+
+    def detach_process_context():
+        """The default behavior in python-daemon is to let the parent die, but
+        that doesn't work for us - the parent becomes the first client and
+        should stay alive.
+        """
+        # Make the process a process leader - signals sent to the parent group
+        # will no longer propagate.
+        os.setsid()
+
+    # If detach_process is unspecified in the constructor then python-daemon
+    # attempts to determine its value dynamically. This involves accessing stdin
+    # which can fail if it has been overridden (as in unit tests).
+    ctx = daemon.DaemonContext(detach_process=False)
+    for k, v in daemon_options.items():
+        setattr(ctx, k, v)
+
+    # We handle detaching.
+    ctx.detach_process = False
+
+    # Secure umask by default.
+    ctx.umask = 0o077
+
+    detach_process_context()
+
+    with ctx:
+        if log_file:
+            _configure_logging(log_file, loglevel='DEBUG')
+        target()
+
+
 class _Daemon:
+    """Run a function as a detached daemon.
+
+    One of the primary issues with daemon processes at startup is debugging
+    errors, especially when running user code. To that end we want:
+
+    1. Delay return to parent for as long as possible to rule out exceptions
+       or early exit in the child.
+    2. Make exception handling transparent.
+    """
     def __init__(self, target, daemon_options: Dict, log_file=None):
         self._target = target
         self._daemon_options = daemon_options
@@ -120,7 +275,7 @@ class _Daemon:
             any exception from the child process
         """
         child_pipe, parent_pipe = Pipe()
-        p = Process(target=self._run, args=(child_pipe, self._target))
+        p = Process(target=self._run, args=(child_pipe, self._target), name='server-spawner')
         p.start()
         ready = wait([p.sentinel, parent_pipe], timeout=start_timeout)
 
@@ -242,80 +397,151 @@ class _Daemon:
 def _run_server(
         callback: RequestCallbackT,
         server_idle_timeout: Optional[float], done) -> None:
-    """Start server that provides requests to `callback`.
+    """Server server that provides sockets to `callback`.
 
     Method must be invoked when cwd is suitable for secure creation of files.
 
     Args:
         callback: the callback function invoked on each request
         server_idle_timeout: timeout after which the server will stop
-            automatically
+        automatically
         done: callback function invoked after setup and before we start handling
             requests
     """
     logger.debug('_run_server()')
 
-    # XXX: We may want to validate the callback here, or just leave it to
-    #  the caller.
+    loop = asyncio.new_event_loop()
 
-    class RequestHandler(socketserver.BaseRequestHandler):
-        def handle(self):
-            logger.debug('handle()')
-            callback(self.request)
+    def print_exception(_loop, context):
+        exc = context['exception']
+        formatted_exc = ''.join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__))
+        logger.error(
+            'Error in event loop: %s\n%s', context['message'], formatted_exc)
+    loop.set_exception_handler(print_exception)
 
-    class ForkingUnixServer(
-            socketserver.ForkingMixIn, socketserver.UnixStreamServer):
-        def __init__(self, *args, **kwargs):
-            socketserver.UnixStreamServer.__init__(self, *args, **kwargs)
-            self._last_active_time = time.monotonic()
+    # socket_name is relative and we must already have cwd set to the
+    # runtime_dir.
+    server = Server(socket_name, callback, server_idle_timeout, loop=loop)
 
-        def service_actions(self):
-            """Shutdown server if timeout has been reached.
-            """
-            # Extend.
-            super().service_actions()
-            if server_idle_timeout is None:
-                return
-            now = time.monotonic()
-            if self.active_children:
-                self._last_active_time = now
-            elif now - self._last_active_time >= server_idle_timeout:
-                shutdown()
-
-    # If the server creates the socket file in-place then the waiting
-    # client may use it before the server has called `bind` and
-    # `listen`. To avoid this race condition we create a temporary file
-    # and then rename, which is atomic.
-    with tempfile.TemporaryDirectory(dir='.') as p:
-        temp_socket_name = f'{p}/socket'
-        server = ForkingUnixServer(temp_socket_name, RequestHandler)
-        os.rename(temp_socket_name, socket_name)
-
-    # The following activities can cause server shutdown:
-    # 1. Signal
-    # 2. Idle timeout
     def shutdown():
-        def inner_shutdown():
-            os.unlink(socket_name)
-            server.shutdown()
-        t = threading.Thread(target=inner_shutdown, daemon=True)
-        t.start()
+        loop.create_task(server.stop())
 
-    def signal_handler(sig, _frame):
-        logger.debug(f'Received signal: {sig}')
-        # Our server is single-threaded, and server.shutdown() blocks, so we
-        # need another thread to actually invoke shutdown otherwise we deadlock.
-        shutdown()
+    loop.add_signal_handler(signal.SIGTERM, shutdown)
 
-    # Gracefully shut down if we get sigterm.
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Start server before done so it is listening and any connecting clients
+    # will not receive ConnectionRefused.
+    loop.run_until_complete(server.start())
 
-    # Signal OK before handling requests.
     done()
 
-    # 10 ms granularity for shutdown/idle timeout
-    interval = 0.01
-    server.serve_forever(interval)
+    # For logging.
+    multiprocessing.current_process().name = 'server'
+
+
+    server.serve_forever()
+
+
+class Server:
+    """Server accepts new connections and dispatches handling of requests to
+     the ProcessExecutor.
+
+    Per https://bugs.python.org/issue21998 asyncio is not fork-safe, so we spawn
+    an executor prior to the starting of the event loop which has essentially
+    the state that existed after the call to the cli factory.
+    """
+    def __init__(
+            self, socket_path, callback, idle_timeout: Optional[int] = None,
+            shutdown_ctx=None, loop=None):
+        self._callback = callback
+        self._idle_timeout = idle_timeout
+        self._executor = ProcessExecutor()
+        if not loop:
+            loop = asyncio.new_event_loop()
+        # We manage our own loop to not pollute the state of spawned children.
+        self._loop = loop
+        self._loop.set_debug(True)
+        self._server = None
+        self._shutdown_ctx = shutdown_ctx
+        self._active = 0
+        self._listener = Listener(socket_path)
+        t = threading.Thread(target=self._serve, daemon=True)
+        t.start()
+
+    def _serve(self) -> NoReturn:
+        while True:
+            try:
+                conn = self._listener.accept()
+            except multiprocessing.AuthenticationError:
+                continue
+            callback = functools.partial(self._handle_connection, conn)
+            # Could technically join thread if this fails due to being called
+            # after loop close.
+            self._loop.call_soon_threadsafe(callback)
+
+    def _set_idle_timer(self):
+        if not self._idle_timeout:
+            return
+        self._idle_timer = DeadlineTimer(self._timeout, self._loop)
+        self._idle_timer.expires_from_now(self._idle_timeout)
+
+    def _clear_idle_timer(self):
+        if not self._idle_timeout:
+            return
+        self._idle_timer.cancel()
+        self._idle_timer = None
+
+    async def start(self):
+        class Protocol(asyncio.Protocol):
+            def connection_made(_, transport: asyncio.Transport):
+                self._loop.create_task(self._handle_socket(transport))
+
+        self._server = await self._loop.create_unix_server(
+            Protocol, path=self._socket_path)
+
+    async def _handle_connection(self, conn):
+        self._active += 1
+        self._clear_idle_timer()
+        result = await self._loop.run_in_executor(
+            self._executor, self._runner, conn)
+        # Finish up communication with the process exit code.
+        await self._loop.sock_sendall(
+            sock, str(result.exitcode).encode('ascii'))
+        self._active -= 1
+        if not self._active:
+            self._set_idle_timer()
+
+    def _runner(self, sock):
+        self._callback(sock)
+
+    def _timeout(self):
+        if self._executor.active_count():
+            self._idle_timer.expires_from_now(self._idle_timeout)
+        else:
+            self._loop.create_task(self.stop())
+
+    def serve_forever(self):
+        if self._server is None:
+            self._loop.create_task(self.start())
+        # DEBUG
+        async def interval():
+            while True:
+                logger.debug('awake')
+                await asyncio.sleep(1)
+        self._loop.create_task(interval())
+        self._loop.run_forever()
+
+    async def stop(self):
+        # Do server shutdown and pending event handling first.
+        with ExitStack() as stack:
+            # Placeholder for multi-process server admin lock.
+            if self._shutdown_ctx:
+                stack.enter_context(self._shutdown_ctx)
+            os.unlink(socket_name)
+            self._server.close()
+            await self._server.wait_closed()
+        # Wait for any child processes handling client requests.
+        self._executor.shutdown()
 
 
 def _configure_logging(logfile: Path, loglevel: str) -> None:
@@ -330,7 +556,7 @@ def _configure_logging(logfile: Path, loglevel: str) -> None:
             f'{__name__}-formatter': {
                 '()': UTCFormatter,
                 'format':
-                    '#### [{asctime}][{levelname}][{name}]\n    {message}',
+                    '#### [{asctime}][{levelname}][{name}][{process} ({processName})][{thread} ({threadName})]\n    {message}',
                 'style': '{',
             }
         },
@@ -346,7 +572,11 @@ def _configure_logging(logfile: Path, loglevel: str) -> None:
             }
         },
         'loggers': {
-            __name__: {
+            'quicken': {
+                'level': loglevel,
+                'handlers': [f'{__name__}-handler'],
+            },
+            'asyncio': {
                 'level': loglevel,
                 'handlers': [f'{__name__}-handler'],
             },

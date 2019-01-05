@@ -14,8 +14,7 @@ from typing import Any, ContextManager, List
 import uuid
 
 import psutil
-
-from quicken.fd import max_pid_len
+import tid
 
 
 @contextmanager
@@ -37,7 +36,14 @@ def isolated_filesystem() -> ContextManager[Path]:
 
 @contextmanager
 def env(**kwargs) -> ContextManager:
-    """Update environment within context manager.
+    """Update environment only within context manager.
+
+    Args:
+        kwargs: Key-value pairs corresponding to environment variables to set in
+            the with block. If an argument is set to `None` then the environment
+            variable is removed. Only the provided environment variables are
+            changed, any changes made to other environment variables in the with
+            block are not undone.
     """
     def update(target, source):
         updated = {}
@@ -61,6 +67,8 @@ def env(**kwargs) -> ContextManager:
 
 @contextmanager
 def argv(args: List[str]) -> ContextManager:
+    """Set argv within the context.
+    """
     argv = sys.argv
     sys.argv = args
     try:
@@ -85,8 +93,8 @@ def patch_attribute(obj: Any, attr: str, new_attr: Any):
 class ChildManager:
     """Register children with the eldest parent process.
 
-    We do this instead of recursively getting children because intermediate
-    processes may have already died.
+    We do this instead of recursively getting children with psutil because
+    intermediate processes may have already died.
     """
     def __init__(self):
         self._tempdir = tempfile.mkdtemp()
@@ -104,6 +112,7 @@ class ChildManager:
 
         class Handler(socketserver.StreamRequestHandler):
             def handle(_self):
+                max_pid_len = len(Path('/proc/sys/kernel/pid_max').read_bytes())
                 pid = int(_self.request.recv(max_pid_len).decode('utf-8'))
                 self.children_append(psutil.Process(pid=pid))
 
@@ -153,7 +162,10 @@ def contained_children(timeout=1) -> ContextManager:
 
 _name_re = re.compile(r'(?P<file>.+?)::(?P<name>.+?) \(.*\)$')
 def current_test_name():
-    name = os.environ['PYTEST_CURRENT_TEST']
+    try:
+        name = os.environ['PYTEST_CURRENT_TEST']
+    except KeyError:
+        return '<outside test>'
     m = _name_re.match(name)
     if not m:
         raise RuntimeError(f'Could not extract name from {name}')
@@ -166,23 +178,32 @@ def setup_logging() -> None:
 
     class TestNameAdderFilter(logging.Filter):
         def filter(self, record):
-            record.test_name = os.environ['PYTEST_CURRENT_TEST']
+            record.test_name = current_test_name()
             record.pid = os.getpid()
+            return True
+
+    class TidFilter(logging.Filter):
+        def filter(self, record):
+            record.tid = tid.gettid()
             return True
 
     logging.config.dictConfig({
         'version': 1,
-        'disable_existing_loggers': True,
+        'disable_existing_loggers': False,
         'filters': {
             'test_name': {
                 '()': TestNameAdderFilter,
                 'name': 'test_name',
             },
+            'tid': {
+                '()': TidFilter,
+                'name': 'tid',
+            }
         },
         'formatters': {
             'default': {
                 '()': UTCFormatter,
-                'format': '#### [{asctime}][{levelname}][{pid}][{test_name}->{name}]\n    {message}',
+                'format': '#### [{asctime}][{levelname}][{pid}->{tid}][{test_name}->{name}]\n    {message}',
                 'style': '{',
             }
         },
@@ -191,13 +212,13 @@ def setup_logging() -> None:
                 '()': 'logging.FileHandler',
                 'level': 'DEBUG',
                 'filename': 'pytest.log',
-                'filters': ['test_name'],
+                'filters': ['test_name', 'tid'],
                 'encoding': 'utf-8',
                 'formatter': 'default',
             }
         },
         'root': {
-            'filters': ['test_name'],
+            'filters': ['test_name', 'tid'],
             'handlers': ['file'],
             'level': 'DEBUG',
         }

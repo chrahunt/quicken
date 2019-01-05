@@ -1,3 +1,9 @@
+# Overrides Python-level pickle serialization to allow nested functions to
+# be used.
+# Must be before multiprocessing imports.
+#import dill
+
+import atexit
 import json
 import logging
 from multiprocessing import active_children, Process, Pipe
@@ -502,3 +508,84 @@ def test_command_does_not_hang_on_first_invocation():
                 encoding='utf-8').strip().split()
             assert parent_pid_2 != main_pid
             assert parent_pid_1 == parent_pid_2
+
+
+def test_exit_code_propagated_from_function():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            return 2
+        return inner
+
+    with contained_children():
+        assert runner() == 2
+
+
+def test_exit_code_propagated_on_sys_exit():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            sys.exit(3)
+        return inner
+
+    with contained_children():
+        assert runner() == 3
+
+
+def test_exit_code_propagated_on_sys_exit_none():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            sys.exit()
+        return inner
+
+    with contained_children():
+        assert runner() == 0
+
+
+def test_exit_code_propagated_on_os_exit():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            os._exit(4)
+        return inner
+
+    with contained_children():
+        assert runner() == 4
+
+
+def test_exit_code_propagated_on_exception():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            raise RuntimeError('expected')
+        return inner
+
+    with contained_children():
+        assert runner() == 1
+
+
+def test_exit_code_propagated_on_atexit_sys_exit():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            def func():
+                sys.exit(5)
+            atexit.register(func)
+        return inner
+
+    with contained_children():
+        assert runner() == 5
+
+
+def test_exit_code_propagated_on_atexit_exception():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            def func():
+                raise RuntimeError('expected')
+            atexit.register(func)
+        return inner
+
+    with contained_children():
+        assert runner() == 1
