@@ -1,8 +1,3 @@
-# Overrides Python-level pickle serialization to allow nested functions to
-# be used.
-# Must be before multiprocessing imports.
-#import dill
-
 import atexit
 import json
 import logging
@@ -11,8 +6,11 @@ import os
 import sys
 import time
 
-from quicken import cli_factory
-from quicken.constants import pid_file_name
+import psutil
+import pytest
+
+from quicken import __version__, cli_factory
+from quicken.constants import server_state_name
 from quicken.xdg import RuntimeDir
 
 from .utils import (
@@ -190,6 +188,7 @@ def test_server_idle_timeout_is_respected():
     # And the server should shut down 100ms after the last request
     with isolated_filesystem() as path:
         idle_timeout = 0.1
+
         @cli_factory(
             current_test_name(), runtime_dir_path=path,
             server_idle_timeout=idle_timeout)
@@ -228,6 +227,7 @@ def test_server_idle_timeout_acknowledges_active_children():
     # And the server should shut down 100ms after the last request
     with isolated_filesystem() as path:
         idle_timeout = 0.1
+
         @cli_factory(
             current_test_name(), runtime_dir_path=path,
             server_idle_timeout=idle_timeout)
@@ -378,8 +378,13 @@ def test_daemon_reload_ok_when_stale_pidfile_exists():
             p.start()
             worker_pid = str(p.pid)
             runtime_dir = RuntimeDir(dir_path=path)
-            pid_file = runtime_dir.path(pid_file_name)
-            pid_file.write_text(worker_pid, encoding='utf-8')
+            process = psutil.Process(pid=p.pid)
+            state_file = runtime_dir.path(server_state_name)
+            state_file.write_text(json.dumps({
+                'create_time': process.create_time(),
+                'pid': worker_pid,
+                'version': __version__,
+            }), encoding='utf-8')
 
             assert runner() == 0
             # Make sure the same pid file was used for the daemon.
@@ -387,9 +392,9 @@ def test_daemon_reload_ok_when_stale_pidfile_exists():
             runner_parent_pid = output_file.read_text(encoding='utf-8')
             assert runner_parent_pid.strip() != main_pid
             assert runner_parent_pid.strip() != ''
-            daemon_pid = pid_file.read_text(encoding='utf-8').strip()
-            assert daemon_pid == runner_parent_pid
-            assert worker_pid != daemon_pid
+            daemon_info = json.loads(state_file.read_text(encoding='utf-8'))
+            assert str(daemon_info['pid']) == runner_parent_pid
+            assert worker_pid != str(daemon_info['pid'])
             parent_conn.send(1)
             p.join()
             # Must not have been killed.
@@ -532,6 +537,17 @@ def test_exit_code_propagated_on_sys_exit():
         assert runner() == 3
 
 
+def test_exit_code_propagated_on_sys_exit_0():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            sys.exit(0)
+        return inner
+
+    with contained_children():
+        assert runner() == 0
+
+
 def test_exit_code_propagated_on_sys_exit_none():
     @cli_factory(current_test_name())
     def runner():
@@ -543,7 +559,7 @@ def test_exit_code_propagated_on_sys_exit_none():
         assert runner() == 0
 
 
-def test_exit_code_propagated_on_os_exit():
+def test_exit_code_propagated_on_os__exit():
     @cli_factory(current_test_name())
     def runner():
         def inner():
@@ -566,6 +582,7 @@ def test_exit_code_propagated_on_exception():
 
 
 def test_exit_code_propagated_on_atexit_sys_exit():
+    # sys.exit has no effect when invoked from an atexit handler.
     @cli_factory(current_test_name())
     def runner():
         def inner():
@@ -575,9 +592,11 @@ def test_exit_code_propagated_on_atexit_sys_exit():
         return inner
 
     with contained_children():
-        assert runner() == 5
+        assert runner() == 0
 
 
+# multiprocessing does not support `atexit`.
+@pytest.mark.skip
 def test_exit_code_propagated_on_atexit_exception():
     @cli_factory(current_test_name())
     def runner():
@@ -589,3 +608,28 @@ def test_exit_code_propagated_on_atexit_exception():
 
     with contained_children():
         assert runner() == 1
+
+
+# This case is unsupported because multiprocessing exits the process using
+# os._exit, which bypasses calling atexit-registered handlers.
+@pytest.mark.skip
+def test_exit_code_propagated_on_atexit_os__exit():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            def func():
+                os._exit(3)
+            atexit.register(func)
+        return inner
+
+    with contained_children():
+        assert runner() == 3
+
+
+def test_exit_code_propagated_when_server_gets_sigterm():
+    # Given the server is running
+    # And is processing a request
+    # When the server receives sigterm
+    # Then it will finish processing the request
+    # And send the correct exit code
+    ...

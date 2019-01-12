@@ -8,10 +8,16 @@ from typing import Any, ContextManager, Union
 
 
 @contextmanager
-def chdir(fd: int) -> ContextManager:
+def chdir(fd) -> ContextManager:
+    """
+    Args:
+        fd: anything suitable for passing to os.chdir(), or something with a
+            `fileno` member.
+    """
     cwd = os.open('.', os.O_RDONLY)
-    # os.chdir is equivalent but PyCharm complains about invalid argument type.
-    os.fchdir(fd)
+    if hasattr(fd, 'fileno'):
+        fd = fd.fileno()
+    os.chdir(fd)
     try:
         yield
     finally:

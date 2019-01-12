@@ -11,29 +11,36 @@ client -> server
 To allow use of any callable in the server we override the forkserver
 implementation and do not
 """
+from abc import ABC, abstractmethod
 import asyncio
 from contextlib import ExitStack
 import functools
+import json
 import logging
 import logging.config
 import multiprocessing
 from multiprocessing import Pipe, Process
-from multiprocessing.connection import Listener, wait
+from multiprocessing.connection import wait
 import os
 from pathlib import Path
 import signal
 import socket
 import sys
-import threading
 import time
 import traceback
-from typing import Callable, Dict, Optional, NoReturn
+from typing import Callable, Dict, Optional
 
 import daemon
 import daemon.daemon
+import psutil
 
-from ._asyncio import DeadlineTimer, ProcessExecutor
-from .constants import socket_name
+from .__version__ import __version__
+from ._asyncio import AsyncConnectionAdapter, AsyncListener, ConnectionClose, \
+    DeadlineTimer, ListenerStopped, ProcessExecutor
+from ._debug import log_calls
+from ._typing import NoneFunction
+from .constants import socket_name, server_state_name
+from .protocol import ProcessState, Request, RequestTypes, Response, ServerState
 from .xdg import RuntimeDir
 
 
@@ -70,9 +77,6 @@ def run(
         # actual runtime dir and not at the path that happens to exist at the
         # time.
         'working_directory': runtime_dir.fileno(),
-        # The owner of the pidfile is the only one that can do any operations
-        # within the runtime directory.
-        #'pidfile': PidFile(pid_file_name, piddir='.'),
         # Keep runtime directory open.
         'files_preserve': [runtime_dir.fileno()],
     }
@@ -177,7 +181,7 @@ def run_in_daemon(target, daemon_options: Dict, log_file=None):
         # cannot distinguish between the ones we want to keep and
         # those we do not. For our use case there should not be
         # many opened files anyway.
-        def patched(exclude=None):
+        def patched(_exclude=None):
             return
         daemon.daemon.close_all_open_files = patched
 
@@ -234,6 +238,7 @@ class _Daemon:
         """Any required patches.
         """
         close_all_open_files = daemon.daemon.close_all_open_files
+
         # TODO: Upstream into python-daemon, see open PRs here:
         #  - https://pagure.io/python-daemon/pull-requests
         # TODO: Speed up close by relying on platform-specific speedup
@@ -306,7 +311,7 @@ class _Daemon:
         if exc:
             raise exc
 
-    def _run(self, conn: Connection, callback):
+    def _run(self, conn: multiprocessing.connection.Connection, callback):
         """
 
         Args:
@@ -321,22 +326,12 @@ class _Daemon:
             # Fork to detach from multiprocessing child management.
             pid = os.fork()
             if pid:
-                pidfile = self._daemon_options['pidfile']
-                # TODO: Need higher-level locking to prevent race conditions on
-                #  reading/writing the pidfile.
-                # Update pidfile with the actual pid.
-                fh = pidfile.fh
-                fh.seek(0)
-                fh.truncate()
-                ctx.pidfile.pid = pid
-                fh.write(f'{pid}\n')
-                fh.flush()
-                os.fsync(fh.fileno())
-                fh.seek(0)
+                # TODO: Determine why an exception thrown here did not propagate back up to the caller.
+                #  was it because the finalizer ran and errored out before the exception handling code had
+                #  a chance to run?
+                #pidfile = self._daemon_options['pidfile']
                 # Ensure we don't return to caller.
                 os._exit(0)
-            # Close sentinel in grandchild, just to keep things clean.
-            #os.close(current_process().sentinel)
 
         try:
             # Pass detach_process to avoid exception within python-daemon when
@@ -404,13 +399,14 @@ def _run_server(
     Args:
         callback: the callback function invoked on each request
         server_idle_timeout: timeout after which the server will stop
-        automatically
+            automatically
         done: callback function invoked after setup and before we start handling
             requests
     """
     logger.debug('_run_server()')
 
     loop = asyncio.new_event_loop()
+    loop.set_debug(True)
 
     def print_exception(_loop, context):
         exc = context['exception']
@@ -420,128 +416,250 @@ def _run_server(
             'Error in event loop: %s\n%s', context['message'], formatted_exc)
     loop.set_exception_handler(print_exception)
 
+    handler = ProcessConnectionHandler(callback, {}, loop=loop)
+
+    def finish_loop():
+        logger.debug('Stopping loop')
+        loop.stop()
+        tasks = asyncio.all_tasks(loop)
+        logger.debug('Number of pending tasks: %d', len(tasks))
+        loop.run_until_complete(asyncio.gather(*tasks))
+        logger.debug('Finished pending tasks')
+
     # socket_name is relative and we must already have cwd set to the
     # runtime_dir.
-    server = Server(socket_name, callback, server_idle_timeout, loop=loop)
+    server = Server(
+        socket_name, handler, finish_loop, server_idle_timeout, loop=loop)
 
     def shutdown():
+        logger.debug('shutdown()')
         loop.create_task(server.stop())
 
     loop.add_signal_handler(signal.SIGTERM, shutdown)
-
-    # Start server before done so it is listening and any connecting clients
-    # will not receive ConnectionRefused.
-    loop.run_until_complete(server.start())
 
     done()
 
     # For logging.
     multiprocessing.current_process().name = 'server'
 
+    # For server state info.
+    pid = os.getpid()
+    process = psutil.Process(pid)
+    server_state = {
+        'version': __version__,
+        'create_time': process.create_time(),
+        'pid': pid,
+    }
+    Path(server_state_name).write_text(
+        json.dumps(server_state), encoding='utf-8')
 
-    server.serve_forever()
+    loop.create_task(server.serve())
+
+    loop.run_forever()
+    logger.debug('Server finished.')
+
+
+class ConnectionHandler(ABC):
+    @abstractmethod
+    async def handle_connection(self, connection: AsyncConnectionAdapter):
+        pass
+
+    @abstractmethod
+    async def handle_shutdown(self):
+        pass
+
+
+class ProcessConnectionHandler(ConnectionHandler):
+    def __init__(self, callback, context: Dict[str, str], loop=None):
+        """
+        Args:
+            callback: function to be executed in child process
+            context: server execution context, pretty much a user info object
+        """
+        if not loop:
+            loop = asyncio.get_event_loop()
+        self._loop = loop
+
+        self._callback = callback
+        self._context = context
+        self._start_time = time.time()
+        self._pid = os.getpid()
+        self._executor = ProcessExecutor()
+        self._connection_finish_cv = asyncio.Condition(loop=self._loop)
+        self._num_active_connections = 0
+
+    async def handle_connection(self, connection: AsyncConnectionAdapter):
+        self._num_active_connections += 1
+        while True:
+            try:
+                request: Request = await connection.recv()
+            except ConnectionClose:
+                logger.debug(
+                    'Connection closed (%d)', connection.connection.fileno())
+                # TODO: Execute run_process in its own concurrent coroutine and
+                #  wait for connection close - then propagate this to the other
+                #  process.
+                break
+            if request.name == RequestTypes.get_server_state:
+                state = ServerState(self._start_time, self._pid, self._context)
+                await connection.send(Response(state))
+            elif request.name == RequestTypes.run_process:
+                process_state = request.contents
+                result = await self._execute_callback(process_state)
+                logger.debug('Result: %s', result)
+                await connection.send(Response(result))
+        self._num_active_connections -= 1
+        async with self._connection_finish_cv:
+            self._connection_finish_cv.notify()
+
+    async def _execute_callback(self, process_state) -> int:
+        def setup_child():
+            ProcessState.apply_to_current_process(process_state)
+            try:
+                sys.exit(self._callback())
+            except SystemExit as e:
+                # multiprocessing sets exitcode to 1 if `sys.exit` is called
+                # with `None` or no arguments, so we re-map it here.
+                if not e.args:
+                    e.args = (0,)
+                    e.code = 0
+                raise
+        result = await asyncio.get_running_loop().run_in_executor(
+            self._executor, setup_child)
+        return result.exitcode
+
+    async def handle_shutdown(self):
+        """Shutdown executor"""
+        # Waits for all processes to finish.
+        self._executor.shutdown()
+        # Wait for handling of all connections to be done.
+        async with self._connection_finish_cv:
+            await self._connection_finish_cv.wait_for(
+                lambda: not self._num_active_connections)
 
 
 class Server:
-    """Server accepts new connections and dispatches handling of requests to
+    """A multiprocessing.Connection server.Server accepts new connections and dispatches handling of requests to
      the ProcessExecutor.
 
     Per https://bugs.python.org/issue21998 asyncio is not fork-safe, so we spawn
     an executor prior to the starting of the event loop which has essentially
     the state that existed after the call to the cli factory.
+
+    Not thread-safe.
     """
     def __init__(
-            self, socket_path, callback, idle_timeout: Optional[int] = None,
+            self, socket_path, handler: ConnectionHandler,
+            on_shutdown: NoneFunction, idle_timeout: Optional[int] = None,
             shutdown_ctx=None, loop=None):
-        self._callback = callback
-        self._idle_timeout = idle_timeout
-        self._executor = ProcessExecutor()
+        """
+        Args:
+            socket_path:
+            handler: Handler for received connections
+            idle_timeout:
+            shutdown_ctx: Context manager to be entered prior to server shutdown.
+            loop:
+        """
         if not loop:
-            loop = asyncio.new_event_loop()
-        # We manage our own loop to not pollute the state of spawned children.
-        self._loop = loop
-        self._loop.set_debug(True)
-        self._server = None
-        self._shutdown_ctx = shutdown_ctx
-        self._active = 0
-        self._listener = Listener(socket_path)
-        t = threading.Thread(target=self._serve, daemon=True)
-        t.start()
+            loop = asyncio.get_event_loop()
 
-    def _serve(self) -> NoReturn:
+        self._loop = loop
+        self._listener = AsyncListener(socket_path, loop=self._loop)
+        self._handler = handler
+        self._idle_timeout = idle_timeout
+        self._idle_timer = None
+        self._shutdown_ctx = shutdown_ctx
+        self._num_active_connections = 0
+        self._shutting_down = False
+        self._shutdown_accept_cv = asyncio.Condition(loop=self._loop)
+        self._on_shutdown = on_shutdown
+
+    async def serve(self):
         while True:
             try:
-                conn = self._listener.accept()
-            except multiprocessing.AuthenticationError:
-                continue
-            callback = functools.partial(self._handle_connection, conn)
-            # Could technically join thread if this fails due to being called
-            # after loop close.
-            self._loop.call_soon_threadsafe(callback)
+                connection = await self._listener.accept()
+            except ListenerStopped:
+                if not self._shutting_down:
+                    logger.error('Listener has stopped')
+                else:
+                    async with self._shutdown_accept_cv:
+                        self._shutdown_accept_cv.notify()
+                return
+
+            logger.debug(
+                'Accepted connection (%d)', connection.connection.fileno())
+            self._handle_connection(connection)
+
+    async def stop(self):
+        """Gracefully stop server, processing all pending connections.
+        """
+        # Do server shutdown and pending event handling first.
+        # Server shutdown should ensure:
+        # 1. No accepted connections are unhandled
+        # 2. All pending asynchronous functions have returned
+        # 3. All cleanup by the handler is done.
+        logger.debug('Server.stop()')
+        self._shutting_down = True
+        with ExitStack() as stack:
+            if self._shutdown_ctx:
+                stack.enter_context(self._shutdown_ctx)
+            # Prevent timeout from occurring while we're shutting down.
+            self._clear_idle_timer()
+            # Closing the listener ensures there will be no more connections
+            # queued.
+            logger.debug('Waiting for acceptor')
+            await self._listener.close()
+            logger.debug('Waiting for pending connections')
+            async with self._shutdown_accept_cv:
+                await self._shutdown_accept_cv.wait()
+            logger.debug('Waiting for handler shutdown')
+            await self._handler.handle_shutdown()
+            logger.debug('Waiting for shutdown callback')
+            # Finish everything off.
+            self._on_shutdown()
+
+    def _handle_connection(self, connection: AsyncConnectionAdapter):
+        self._idle_handle_connect()
+
+        async def wait_closed():
+            await connection.closed()
+            self._idle_handle_close()
+        self._loop.create_task(wait_closed())
+        self._loop.create_task(
+            self._handler.handle_connection(connection))
+
+    def _handle_timeout(self):
+        self._loop.create_task(self.stop())
 
     def _set_idle_timer(self):
-        if not self._idle_timeout:
+        if self._shutting_down:
             return
-        self._idle_timer = DeadlineTimer(self._timeout, self._loop)
+        if self._idle_timeout is None:
+            return
+        if self._idle_timer is not None:
+            return
+        self._idle_timer = DeadlineTimer(self._handle_timeout, self._loop)
         self._idle_timer.expires_from_now(self._idle_timeout)
 
     def _clear_idle_timer(self):
-        if not self._idle_timeout:
+        if self._idle_timeout is None:
+            return
+        if self._idle_timer is None:
             return
         self._idle_timer.cancel()
         self._idle_timer = None
 
-    async def start(self):
-        class Protocol(asyncio.Protocol):
-            def connection_made(_, transport: asyncio.Transport):
-                self._loop.create_task(self._handle_socket(transport))
-
-        self._server = await self._loop.create_unix_server(
-            Protocol, path=self._socket_path)
-
-    async def _handle_connection(self, conn):
-        self._active += 1
+    def _idle_handle_connect(self):
+        self._num_active_connections += 1
         self._clear_idle_timer()
-        result = await self._loop.run_in_executor(
-            self._executor, self._runner, conn)
-        # Finish up communication with the process exit code.
-        await self._loop.sock_sendall(
-            sock, str(result.exitcode).encode('ascii'))
-        self._active -= 1
-        if not self._active:
+
+    def _idle_handle_close(self):
+        self._num_active_connections -= 1
+        if not self._num_active_connections:
             self._set_idle_timer()
 
-    def _runner(self, sock):
-        self._callback(sock)
 
-    def _timeout(self):
-        if self._executor.active_count():
-            self._idle_timer.expires_from_now(self._idle_timeout)
-        else:
-            self._loop.create_task(self.stop())
-
-    def serve_forever(self):
-        if self._server is None:
-            self._loop.create_task(self.start())
-        # DEBUG
-        async def interval():
-            while True:
-                logger.debug('awake')
-                await asyncio.sleep(1)
-        self._loop.create_task(interval())
-        self._loop.run_forever()
-
-    async def stop(self):
-        # Do server shutdown and pending event handling first.
-        with ExitStack() as stack:
-            # Placeholder for multi-process server admin lock.
-            if self._shutdown_ctx:
-                stack.enter_context(self._shutdown_ctx)
-            os.unlink(socket_name)
-            self._server.close()
-            await self._server.wait_closed()
-        # Wait for any child processes handling client requests.
-        self._executor.shutdown()
+log_calls(Server)
 
 
 def _configure_logging(logfile: Path, loglevel: str) -> None:

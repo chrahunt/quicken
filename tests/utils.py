@@ -17,6 +17,9 @@ import psutil
 import tid
 
 
+logger = logging.getLogger(__name__)
+
+
 @contextmanager
 def chdir(path: Path) -> ContextManager:
     current_path = Path.cwd()
@@ -140,7 +143,7 @@ child_manager = ChildManager()
 
 
 @contextmanager
-def contained_children(timeout=1) -> ContextManager:
+def contained_children(timeout=1, assert_graceful=True) -> ContextManager:
     """Automatically kill any Python processes forked in this context, for
     cleanup. Handles any descendents.
 
@@ -156,8 +159,13 @@ def contained_children(timeout=1) -> ContextManager:
             except psutil.NoSuchProcess:
                 pass
         gone, alive = psutil.wait_procs(procs, timeout=timeout)
+        num_alive = len(alive)
         for p in alive:
+            logger.warning('Cleaning up child: %d', p.pid)
             p.kill()
+        if assert_graceful:
+            assert not num_alive, \
+                f'Unexpected children still alive: {alive}'
 
 
 _name_re = re.compile(r'(?P<file>.+?)::(?P<name>.+?) \(.*\)$')

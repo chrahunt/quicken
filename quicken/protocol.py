@@ -6,7 +6,26 @@ import logging
 import os
 from pathlib import Path
 import sys
-from typing import Dict, List
+from typing import Any, Dict, List
+
+# Registers TextIOWrapper handler.
+from . import _multiprocessing
+
+
+class RequestTypes:
+    get_server_state = 'get_server_state'
+    run_process = 'run_process'
+
+
+@dataclass
+class Request:
+    name: str
+    contents: Any
+
+
+@dataclass
+class Response:
+    contents: Any
 
 
 @dataclass
@@ -25,13 +44,13 @@ class ProcessState:
     argv: List[str]
 
     @staticmethod
-    def get() -> ProcessState:
+    def for_current_process() -> ProcessState:
         streams = StdStreams(sys.stdin, sys.stdout, sys.stderr)
         cwd = Path.cwd()
         # Only way to get umask is to set umask.
         umask = os.umask(0o077)
         os.umask(umask)
-        environ = copy.deepcopy(os.environ)
+        environ = dict(os.environ)
         argv = list(sys.argv)
         return ProcessState(streams, cwd, umask, environ, argv)
 
@@ -58,23 +77,13 @@ class ProcessState:
         reset_handlers(logging.getLogger())
 
     @staticmethod
-    def set(state: ProcessState):
+    def apply_to_current_process(state: ProcessState):
         streams = state.std_streams
         __class__._reset_loggers(streams.stdout, streams.stderr)
         os.chdir(str(state.cwd))
         os.umask(state.umask)
         os.environ = copy.deepcopy(state.environment)
         sys.argv = list(state.argv)
-
-
-@dataclass
-class RunProcess:
-    details: ProcessState
-
-
-@dataclass
-class RunProcessResult:
-    returncode: int
 
 
 @dataclass

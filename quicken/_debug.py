@@ -21,3 +21,7 @@ def log_calls(cls):
             setattr(cls, name, get_wrapper(cls, name, fn))
 
 
+def lineno():
+    import inspect
+    frame = inspect.getouterframes(inspect.currentframe())[1]
+    return frame.f_lineno
