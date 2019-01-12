@@ -81,6 +81,16 @@ def argv(args: List[str]) -> ContextManager:
 
 
 @contextmanager
+def umask(umask: int) -> ContextManager:
+    """Set umask within the context.
+    """
+    umask = os.umask(umask)
+    try:
+        yield
+    finally:
+        os.umask(umask)
+
+@contextmanager
 def patch_attribute(obj: Any, attr: str, new_attr: Any):
     """Patch attribute on an object then revert.
     """
@@ -97,7 +107,7 @@ class ChildManager:
     """Register children with the eldest parent process.
 
     We do this instead of recursively getting children with psutil because
-    intermediate processes may have already died.
+    intermediate processes may have already exited.
     """
     def __init__(self):
         self._tempdir = tempfile.mkdtemp()
@@ -105,7 +115,7 @@ class ChildManager:
         self._socket = f'{self._tempdir}/socket'
         self._mutex = threading.Lock()
         self._children = []
-        os.register_at_fork(after_in_child=self.after_in_child)
+        os.register_at_fork(after_in_child=self._after_in_child)
         self._serve()
 
     def _serve(self):
@@ -117,15 +127,11 @@ class ChildManager:
             def handle(_self):
                 max_pid_len = len(Path('/proc/sys/kernel/pid_max').read_bytes())
                 pid = int(_self.request.recv(max_pid_len).decode('utf-8'))
-                self.children_append(psutil.Process(pid=pid))
+                self._children_append(psutil.Process(pid=pid))
 
         server = Server(self._socket, Handler)
         t = threading.Thread(target=server.serve_forever, daemon=True)
         t.start()
-
-    def children_append(self, child):
-        with self._mutex:
-            self._children.append(child)
 
     def children_pop_all(self):
         with self._mutex:
@@ -133,7 +139,15 @@ class ChildManager:
             self._children = []
         return l
 
-    def after_in_child(self):
+    def active_children(self):
+        with self._mutex:
+            return list(self._children)
+
+    def _children_append(self, child):
+        with self._mutex:
+            self._children.append(child)
+
+    def _after_in_child(self):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.connect(self._socket)
             sock.sendall(str(os.getpid()).encode('utf-8'))
@@ -150,7 +164,7 @@ def contained_children(timeout=1, assert_graceful=True) -> ContextManager:
     Timeout is seconds to wait for graceful termination before killing children.
     """
     try:
-        yield
+        yield child_manager
     finally:
         procs = child_manager.children_pop_all()
         for p in procs:

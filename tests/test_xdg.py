@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from quicken.xdg import RuntimeDir
+from quicken._xdg import RuntimeDir
 
 import pytest
 

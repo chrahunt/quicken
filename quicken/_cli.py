@@ -13,15 +13,15 @@ from fasteners import InterProcessLock
 
 from ._client import Client
 from ._typing import NoneFunction
-from .constants import socket_name, server_state_name
-from .protocol import ProcessState, Request, RequestTypes
-from .xdg import chdir, RuntimeDir
+from ._constants import socket_name, server_state_name
+from ._protocol import ProcessState, Request, RequestTypes
+from ._xdg import chdir, RuntimeDir
 
 
 logger = logging.getLogger(__name__)
 
 
-CliFactoryT = Callable[[], NoneFunctionT]
+CliFactoryT = Callable[[], NoneFunction]
 CliFactoryDecoratorT = Callable[[CliFactoryT], NoneFunction]
 BoolProvider = Callable[[], bool]
 
@@ -30,11 +30,11 @@ def cli_factory(
         name: str,
         runtime_dir_path: Optional[str] = None,
         log_file: Optional[str] = None,
-        daemon_start_timeout: float = 5.0,
-        daemon_stop_timeout: float = 2.0,
+        server_start_timeout: float = 5.0,
+        server_stop_timeout: float = 2.0,
         server_idle_timeout: Optional[float] = None,
-        bypass_daemon: Optional[Union[BoolProvider, bool]] = None,
-        reload_daemon: Optional[Union[BoolProvider, bool]] = None,
+        bypass_server: Optional[Union[BoolProvider, bool]] = None,
+        reload_server: Optional[Union[BoolProvider, bool]] = None,
         ) -> CliFactoryDecoratorT:
     """Decorator to mark a function that provides the main script entry point.
 
@@ -62,9 +62,9 @@ def cli_factory(
             falling back to executing function normally.
         server_idle_timeout: time in seconds after which the server will shut
             down if no requests are being processed.
-        bypass_daemon: if True then run command directly instead of trying to
+        bypass_server: if True then run command directly instead of trying to
             use daemon.
-        reload_daemon: if True then restart the daemon process before executing
+        reload_server: if True then restart the daemon process before executing
             the function.
 
     Throws:
@@ -84,7 +84,7 @@ def cli_factory(
             if log_file is None:
                 log_file = Path(os.environ['HOME']) / f'.daemon-{name}.log'
 
-            if bypass_daemon and bypass_daemon():
+            if bypass_server and bypass_server():
                 logger.debug('Bypassing daemon')
                 return factory_fn()()
 
@@ -95,10 +95,10 @@ def cli_factory(
                     factory_fn, runtime_dir, log_file, server_idle_timeout) as manager:
                 try:
                     client = manager.connect()
-                    if reload_daemon and reload_daemon():
+                    if reload_server and reload_server():
                         logger.debug('Reloading daemon')
                         client = manager.restart()
-                    # TODO: Get server quicken version.
+                    # TODO: Get server version.
                     # TODO: Get server context and kill without pid.
                 except ConnectionRefusedError:
                     logger.warning(
@@ -227,7 +227,7 @@ class CliServerManager:
         cli = self._factory()
         # Lazy import so we only take the time to import if we have to start
         # the server.
-        from .server import run
+        from ._server import run
         run(
             cli, log_file=self._log_file,
             runtime_dir=self._runtime_dir,

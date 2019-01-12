@@ -1,6 +1,6 @@
 import multiprocessing.connection
 
-from .protocol import Request, Response
+from ._protocol import Request, Response
 
 
 class Client:

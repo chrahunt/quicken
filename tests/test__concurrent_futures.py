@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from quicken._asyncio import ProcessExecutor
+from quicken._concurrent_futures import ProcessExecutor
 
 from .utils import isolated_filesystem
 
@@ -35,4 +35,3 @@ async def test_process_executor_runs_exiting_function():
         os._exit(exit_code)
     result = await loop.run_in_executor(executor, runner)
     assert result.exitcode == exit_code, 'Must match expected exit code'
-

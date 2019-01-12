@@ -19,8 +19,6 @@ import json
 import logging
 import logging.config
 import multiprocessing
-from multiprocessing import Pipe, Process
-from multiprocessing.connection import wait
 import os
 from pathlib import Path
 import signal
@@ -35,13 +33,15 @@ import daemon.daemon
 import psutil
 
 from .__version__ import __version__
-from ._asyncio import AsyncConnectionAdapter, AsyncListener, ConnectionClose, \
-    DeadlineTimer, ListenerStopped, ProcessExecutor
+from ._asyncio import DeadlineTimer
+from ._concurrent_futures import ProcessExecutor
 from ._debug import log_calls
+from ._multiprocessing import run_in_process, AsyncConnectionAdapter, \
+    AsyncListener, ConnectionClose, ListenerStopped
 from ._typing import NoneFunction
-from .constants import socket_name, server_state_name
-from .protocol import ProcessState, Request, RequestTypes, Response, ServerState
-from .xdg import RuntimeDir
+from ._constants import socket_name, server_state_name
+from ._protocol import ProcessState, Request, RequestTypes, Response, ServerState
+from ._xdg import RuntimeDir
 
 
 logger = logging.getLogger(__name__)
@@ -82,106 +82,20 @@ def run(
     }
 
     target = functools.partial(_run_server, socket_handler, server_idle_timeout)
-    daemon = _Daemon(target, daemon_options, log_file)
-    daemon.start()
+    return run_in_process(
+        daemonize, args=(target, daemon_options, log_file), allow_detach=True)
 
 
-class TimeoutError(Exception):
-    pass
-
-
-def apply_process(target, name=None, args=(), kwargs=None, timeout=None):
-    """Run provided target in a multiprocessing.Process.
-
-    This function does not require that the `target` and arguments
-    are picklable. Only the return value of `target` must be.
-
-    Args:
-        target: same as multiprocessing.Process
-        name: same as multiprocessing.Process
-        args: same as multiprocessing.Process
-        kwargs: same as multiprocessing.Process
-        timeout: seconds after which processing will be aborted and
-            the child process killed
-
-    Returns:
-        The return value of `target`
-
-    Raises:
-        *: Any exception raised by `target`.
-        TimeoutError: If a timeout occurs.
-    """
-    if not kwargs:
-        kwargs = {}
-
-    def runner():
-        try:
-            result = target(*args, **kwargs)
-            child_pipe.send(False)
-            # XXX: What if an exception happens here?
-            child_pipe.send(result)
-            child_pipe.recv()
-        except:
-            child_pipe.send(True)
-            from tblib import pickling_support
-            pickling_support.install()
-            child_pipe.send(sys.exc_info())
-            # Wait for signal from parent process to avoid exit/read race
-            # condition.
-            child_pipe.recv()
-            raise
-
-    ctx = multiprocessing.get_context('fork')
-
-    child_pipe, parent_pipe = ctx.Pipe()
-    p = ctx.Process(target=runner, name=name)
-    p.start()
-
-    ready = wait([p.sentinel, parent_pipe], timeout=timeout)
-
-    # Timeout
-    if not ready:
-        p.kill()
-        raise TimeoutError('Timeout running function.')
-
-    exc = None
-    result = None
-    if parent_pipe in ready:
-        error = parent_pipe.recv()
-        if error:
-            from tblib import pickling_support
-            pickling_support.install()
-            _, exception, tb = parent_pipe.recv()
-            exc = exception.with_traceback(tb)
-        else:
-            result = parent_pipe.recv()
-
-    if p.sentinel in ready:
-        # This can happen if the child process closes file descriptors, but we
-        # do not handle it.
-        assert p.exitcode is not None, 'Exit code must exist'
-        if p.exitcode:
-            if not exc:
-                exc = RuntimeError(
-                    f'Process died with return code {p.exitcode}')
-
-    else:
-        # Indicate OK to continue.
-        parent_pipe.send(True)
-        p.join()
-
-    if exc:
-        raise exc
-    return result
-
-
-def run_in_daemon(target, daemon_options: Dict, log_file=None):
+def daemonize(detach, target, daemon_options: Dict, log_file=None):
     def patch_python_daemon():
         # We don't want to close any open files right now since we
         # cannot distinguish between the ones we want to keep and
         # those we do not. For our use case there should not be
         # many opened files anyway.
-        def patched(_exclude=None):
+        # XXX: If we do eventually want to close open files, keep in mind
+        #  that it may be slow and there are platform-specific speedups we
+        #  can do.
+        def patched(exclude=None):
             return
         daemon.daemon.close_all_open_files = patched
 
@@ -193,7 +107,7 @@ def run_in_daemon(target, daemon_options: Dict, log_file=None):
         should stay alive.
         """
         # Make the process a process leader - signals sent to the parent group
-        # will no longer propagate.
+        # will no longer propagate by default.
         os.setsid()
 
     # If detach_process is unspecified in the constructor then python-daemon
@@ -214,179 +128,7 @@ def run_in_daemon(target, daemon_options: Dict, log_file=None):
     with ctx:
         if log_file:
             _configure_logging(log_file, loglevel='DEBUG')
-        target()
-
-
-class _Daemon:
-    """Run a function as a detached daemon.
-
-    One of the primary issues with daemon processes at startup is debugging
-    errors, especially when running user code. To that end we want:
-
-    1. Delay return to parent for as long as possible to rule out exceptions
-       or early exit in the child.
-    2. Make exception handling transparent.
-    """
-    def __init__(self, target, daemon_options: Dict, log_file=None):
-        self._target = target
-        self._daemon_options = daemon_options
-        self._log_file = log_file
-        self._patch()
-
-    @staticmethod
-    def _patch():
-        """Any required patches.
-        """
-        close_all_open_files = daemon.daemon.close_all_open_files
-
-        # TODO: Upstream into python-daemon, see open PRs here:
-        #  - https://pagure.io/python-daemon/pull-requests
-        # TODO: Speed up close by relying on platform-specific speedup
-        #  implementations, see:
-        #  - AIX: fcntl.F_CLOSEM: https://bugs.python.org/issue1607087
-        #  - Solaris: closefrom: https://bugs.python.org/issue1663329
-        #  or alternatively don't close any file descriptors at all since
-        #  Python by default sets O_CLOEXEC
-        def patched_close_all_open_files(exclude=None):
-            # For now just bypass so we don't close the fd used for
-            # communicating state back in multiprocess.Process.
-            return
-            # Specific to Linux.
-            fd_dir = Path('/proc/self/fd')
-            if fd_dir.exists():
-                # We shouldn't need much optimization here, as the parent
-                # process is not expected to do more than import required
-                # libraries.
-                for fd in (int(p.stem) for p in fd_dir.iterdir()):
-                    if fd in exclude:
-                        continue
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        # Best effort.
-                        pass
-            else:
-                # XXX: Part of the ctx.open sequence executes `os.closerange`
-                #  which can take significantly longer when running under a
-                #  debugger or `strace`.
-                close_all_open_files(exclude)
-
-        daemon.daemon.close_all_open_files = patched_close_all_open_files
-
-    def start(self, start_timeout=None):
-        """Run daemon.
-
-        Raises:
-            any exception from the child process
-        """
-        child_pipe, parent_pipe = Pipe()
-        p = Process(target=self._run, args=(child_pipe, self._target), name='server-spawner')
-        p.start()
-        ready = wait([p.sentinel, parent_pipe], timeout=start_timeout)
-
-        # Timeout
-        if not ready:
-            p.kill()
-            raise RuntimeError('Timeout starting process')
-
-        exc = None
-        if parent_pipe in ready:
-            error = parent_pipe.recv()
-            if error:
-                from tblib import pickling_support
-                pickling_support.install()
-                _, exception, tb = parent_pipe.recv()
-                # Re-raise exception.
-                exc = exception.with_traceback(tb)
-
-        if p.sentinel in ready:
-            if p.exitcode:
-                if not exc:
-                    exc = RuntimeError(
-                        f'Process died with return code {p.exitcode}')
-        elif not exc:
-            parent_pipe.send(True)
-            p.join()
-
-        if exc:
-            raise exc
-
-    def _run(self, conn: multiprocessing.connection.Connection, callback):
-        """
-
-        Args:
-            conn:
-            callback:
-
-        Returns:
-
-        """
-        def done():
-            conn.send(False)
-            # Fork to detach from multiprocessing child management.
-            pid = os.fork()
-            if pid:
-                # TODO: Determine why an exception thrown here did not propagate back up to the caller.
-                #  was it because the finalizer ran and errored out before the exception handling code had
-                #  a chance to run?
-                #pidfile = self._daemon_options['pidfile']
-                # Ensure we don't return to caller.
-                os._exit(0)
-
-        try:
-            # Pass detach_process to avoid exception within python-daemon when
-            # it tries to access stdin in constructor when detach_process is
-            # set later.
-            ctx = daemon.DaemonContext(detach_process=False)
-            for k, v in self._daemon_options.items():
-                setattr(ctx, k, v)
-
-            # We handle detaching (multiprocessing.Process + setsid())
-            ctx.detach_process = False
-
-            # Secure umask by default.
-            ctx.umask = 0o077
-
-            # Keep connection alive.
-            ctx.files_preserve.append(conn.fileno())
-            # This doesn't work, raising a ValueError('process not started')
-            #ctx.files_preserve.append(current_process().sentinel)
-
-            self._detach_process_context()
-
-            with ctx:
-                if self._log_file:
-                    _configure_logging(self._log_file, loglevel='DEBUG')
-                callback(done)
-        except SystemExit:
-            # Omit processing SystemExit, let it propagate.
-            raise
-        except:
-            conn.send(True)
-            from tblib import pickling_support
-            pickling_support.install()
-            conn.send(sys.exc_info())
-            # Wait for signal from parent process to avoid exit/read race
-            # condition.
-            conn.recv()
-            # multiprocessing takes care of exit code mapping.
-            raise
-
-    @staticmethod
-    def _detach_process_context():
-        """Re-implement detach from python-daemon to keep the original parent
-        alive.
-
-        This is necessary so that we can transparently invoke the actual command
-        when the server comes up.
-        """
-        # We are already being invoked inside a child process (
-        # multiprocessing.Process).
-        # setsid to prevent getting killed with the rest of our parent process
-        # group.
-        os.setsid()
-        # We omit the second fork here since it doesn't really matter if the
-        # daemon has a controlling terminal and it makes testing easier.
+        target(detach)
 
 
 def _run_server(
@@ -520,7 +262,8 @@ class ProcessConnectionHandler(ConnectionHandler):
             except SystemExit as e:
                 # multiprocessing sets exitcode to 1 if `sys.exit` is called
                 # with `None` or no arguments, so we re-map it here.
-                if not e.args:
+                # See https://bugs.python.org/issue35727.
+                if e.code is None:
                     e.args = (0,)
                     e.code = 0
                 raise

@@ -1,7 +1,7 @@
 import io
 import logging
 
-from quicken.protocol import ProcessState
+from quicken._protocol import ProcessState
 
 
 def test_logging_stream_override_works():

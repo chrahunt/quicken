@@ -22,7 +22,7 @@ def reload() -> bool:
     ]
 
 
-@cli_factory('quicken', bypass_daemon=disabled, reload_daemon=reload)
+@cli_factory('quicken', bypass_server=disabled, reload_server=reload)
 def main():
     logger.debug('main()')
     from .app import cli
