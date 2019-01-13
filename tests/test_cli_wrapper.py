@@ -411,7 +411,7 @@ def test_server_reload_ok_when_stale_pidfile_exists():
             state_file = runtime_dir.path(server_state_name)
             state_file.write_text(json.dumps({
                 'create_time': process.create_time(),
-                'pid': worker_pid,
+                'pid': p.pid,
                 'version': __version__,
             }), encoding='utf-8')
 
