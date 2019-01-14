@@ -15,7 +15,7 @@ from ._client import Client
 from ._typing import NoneFunction
 from ._constants import socket_name, server_state_name
 from ._protocol import ProcessState, Request, RequestTypes
-from ._xdg import chdir, RuntimeDir
+from ._xdg import cache_dir, chdir, RuntimeDir
 
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def cli_factory(
             or `/tmp/quicken-{name}-{uid}`. If the directory exists it must be
             owned by the current user and have permissions 700.
         log_file: optional log file used by the server, must be absolute path
-            since the server is moved to `/`. Default is `~/.daemon-{name}.log`.
+            since the server base directory is `/`. Default is `~/.daemon-{name}.log`.
         daemon_start_timeout: time in seconds to wait for daemon to start before
             falling back to executing function normally.
         daemon_stop_timeout: time in seconds to wait for daemon to start before
@@ -82,7 +82,8 @@ def cli_factory(
             nonlocal log_file
 
             if log_file is None:
-                log_file = Path(os.environ['HOME']) / f'.daemon-{name}.log'
+                log_file = cache_dir(f'quicken-{name}') / 'server.log'
+            log_file = Path(log_file).absolute()
 
             if bypass_server and bypass_server():
                 logger.debug('Bypassing daemon')

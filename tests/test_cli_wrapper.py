@@ -3,6 +3,7 @@ import json
 import logging
 from multiprocessing import active_children, Process, Pipe
 import os
+from pathlib import Path
 import stat
 import sys
 import time
@@ -10,19 +11,23 @@ import time
 import psutil
 import pytest
 
-from quicken import __version__, cli_factory
+from quicken import __version__, cli_factory as _cli_factory
 from quicken._constants import server_state_name, socket_name
 from quicken._xdg import RuntimeDir
 
 from .utils import (
     argv, contained_children, current_test_name, env, isolated_filesystem,
-    setup_logging, umask)
-
-
-setup_logging()
+    umask)
 
 
 logger = logging.getLogger(__name__)
+
+
+def cli_factory(*args, **kwargs):
+    #return _cli_factory(*args, **kwargs)
+    log_file = Path('logs').absolute() / f'{current_test_name()}-server.log'
+    kwargs['log_file'] = log_file
+    return _cli_factory(*args, **kwargs)
 
 
 def test_function_is_run_using_server():

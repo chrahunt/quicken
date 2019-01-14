@@ -102,7 +102,7 @@ class RuntimeDir:
                 raise ValueError(
                     'At least one of `base_name` or `dir_path` must be'
                     ' provided.')
-            dir_path = self._get_runtime_dir(base_name)
+            dir_path = runtime_dir(base_name)
         self._path = dir_path
         # Open first.
         try:
@@ -137,17 +137,24 @@ class RuntimeDir:
             raise ValueError('Provided argument must not be absolute')
         return result
 
-    @staticmethod
-    def _get_runtime_dir(base_name):
-        try:
-            return f"{os.environ['XDG_RUNTIME_DIR']}/{base_name}"
-        except KeyError:
-            uid = os.getuid()
-            base_name = f'{base_name}-{uid}'
-            try:
-                return f"{os.environ['TMPDIR']}/{base_name}"
-            except KeyError:
-                return f'/tmp/{base_name}'
-
     def __str__(self):
         return self._path
+
+
+def runtime_dir(base_name):
+    try:
+        return f"{os.environ['XDG_RUNTIME_DIR']}/{base_name}"
+    except KeyError:
+        uid = os.getuid()
+        base_name = f'{base_name}-{uid}'
+        try:
+            return f"{os.environ['TMPDIR']}/{base_name}"
+        except KeyError:
+            return f'/tmp/{base_name}'
+
+
+def cache_dir(base_name):
+    try:
+        return Path(os.environ['XDG_CACHE_HOME']) / base_name
+    except KeyError:
+        return Path(os.environ['HOME']) / '.cache' / base_name

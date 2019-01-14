@@ -33,6 +33,15 @@ jobs:
     condition: succeededOrFailed()
     displayName: Publish test results
 
+    # In lieu of getting logs as attachments on the test summary, we
+    # publish as artifacts.
+  - task: PublishPipelineArtifact@0
+    inputs:
+      artifactName: test_logs
+      targetPath: logs/
+    condition: succeededOrFailed()
+    displayName: Publish logs
+
   - script: poetry build
     displayName: Build
   

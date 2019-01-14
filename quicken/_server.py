@@ -409,6 +409,7 @@ def _configure_logging(logfile: Path, loglevel: str) -> None:
     class UTCFormatter(logging.Formatter):
         converter = time.gmtime
 
+    logfile.parent.mkdir(parents=True, exist_ok=True)
     # TODO: Make fully configurable.
     logging.config.dictConfig({
         'version': 1,

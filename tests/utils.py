@@ -1,6 +1,5 @@
 from contextlib import contextmanager
 import logging
-import logging.config
 import os
 from pathlib import Path
 import re
@@ -9,12 +8,10 @@ import socketserver
 import sys
 import tempfile
 import threading
-import time
 from typing import Any, ContextManager, List
 import uuid
 
 import psutil
-import tid
 
 
 logger = logging.getLogger(__name__)
@@ -127,7 +124,11 @@ class ChildManager:
             def handle(_self):
                 max_pid_len = len(Path('/proc/sys/kernel/pid_max').read_bytes())
                 pid = int(_self.request.recv(max_pid_len).decode('utf-8'))
-                self._children_append(psutil.Process(pid=pid))
+                try:
+                    self._children_append(psutil.Process(pid=pid))
+                except psutil.NoSuchProcess:
+                    # Child died since we received the pid, let it go.
+                    pass
 
         server = Server(self._socket, Handler)
         t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -192,56 +193,3 @@ def current_test_name():
     if not m:
         raise RuntimeError(f'Could not extract name from {name}')
     return m.group('name')
-
-
-def setup_logging() -> None:
-    class UTCFormatter(logging.Formatter):
-        converter = time.gmtime
-
-    class TestNameAdderFilter(logging.Filter):
-        def filter(self, record):
-            record.test_name = current_test_name()
-            record.pid = os.getpid()
-            return True
-
-    class TidFilter(logging.Filter):
-        def filter(self, record):
-            record.tid = tid.gettid()
-            return True
-
-    logging.config.dictConfig({
-        'version': 1,
-        'disable_existing_loggers': False,
-        'filters': {
-            'test_name': {
-                '()': TestNameAdderFilter,
-                'name': 'test_name',
-            },
-            'tid': {
-                '()': TidFilter,
-                'name': 'tid',
-            }
-        },
-        'formatters': {
-            'default': {
-                '()': UTCFormatter,
-                'format': '#### [{asctime}][{levelname}][{pid}->{tid}][{test_name}->{name}]\n    {message}',
-                'style': '{',
-            }
-        },
-        'handlers': {
-            'file': {
-                '()': 'logging.FileHandler',
-                'level': 'DEBUG',
-                'filename': 'pytest.log',
-                'filters': ['test_name', 'tid'],
-                'encoding': 'utf-8',
-                'formatter': 'default',
-            }
-        },
-        'root': {
-            'filters': ['test_name', 'tid'],
-            'handlers': ['file'],
-            'level': 'DEBUG',
-        }
-    })
