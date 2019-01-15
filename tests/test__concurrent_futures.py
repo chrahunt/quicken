@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from quicken._concurrent_futures import ProcessExecutor
+from quicken._concurrent_futures import AsyncProcessExecutor
 
 from .utils import isolated_filesystem
 
 
 @pytest.mark.asyncio
 async def test_process_executor_runs_nested_function():
-    executor = ProcessExecutor()
+    executor = AsyncProcessExecutor()
     loop = asyncio.get_running_loop()
     with isolated_filesystem():
         output_file = Path.cwd() / 'output.txt'
@@ -28,7 +28,7 @@ async def test_process_executor_runs_nested_function():
 
 @pytest.mark.asyncio
 async def test_process_executor_runs_exiting_function():
-    executor = ProcessExecutor()
+    executor = AsyncProcessExecutor()
     loop = asyncio.get_running_loop()
     exit_code = 5
     def runner():

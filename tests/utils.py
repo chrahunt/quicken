@@ -2,15 +2,14 @@ from contextlib import contextmanager
 import logging
 import os
 from pathlib import Path
+import pickle
 import re
-import socket
-import socketserver
 import sys
 import tempfile
-import threading
+import time
 from typing import Any, ContextManager, List
-import uuid
 
+from fasteners import InterProcessLock
 import psutil
 
 
@@ -87,6 +86,7 @@ def umask(umask: int) -> ContextManager:
     finally:
         os.umask(umask)
 
+
 @contextmanager
 def patch_attribute(obj: Any, attr: str, new_attr: Any):
     """Patch attribute on an object then revert.
@@ -108,31 +108,14 @@ class ChildManager:
     """
     def __init__(self):
         self._tempdir = tempfile.mkdtemp()
-        self._id = str(uuid.uuid4())
-        self._socket = f'{self._tempdir}/socket'
-        self._mutex = threading.Lock()
+        self._pidlist = f'{self._tempdir}/pids'
+        self._lock = InterProcessLock(self._pidlist)
         self._children = []
-        os.register_at_fork(after_in_child=self._after_in_child)
-        self._serve()
-
-    def _serve(self):
-        class Server(
-            socketserver.UnixStreamServer, socketserver.ThreadingMixIn):
-            pass
-
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(_self):
-                max_pid_len = len(Path('/proc/sys/kernel/pid_max').read_bytes())
-                pid = int(_self.request.recv(max_pid_len).decode('utf-8'))
-                try:
-                    self._children_append(psutil.Process(pid=pid))
-                except psutil.NoSuchProcess:
-                    # Child died since we received the pid, let it go.
-                    pass
-
-        server = Server(self._socket, Handler)
-        t = threading.Thread(target=server.serve_forever, daemon=True)
-        t.start()
+        self._num_children = 0
+        os.register_at_fork(
+            before=self._before_in_parent,
+            after_in_parent=self._after_in_parent,
+            after_in_child=self._after_in_child)
 
     def children_pop_all(self):
         with self._mutex:
@@ -144,14 +127,45 @@ class ChildManager:
         with self._mutex:
             return list(self._children)
 
+    @property
+    @contextmanager
+    def _mutex(self):
+        """IPC lock on pidlist and save/load _children member.
+        """
+        with self._lock:
+            contents = Path(self._pidlist).read_bytes()
+            if contents:
+                self._children = pickle.loads(contents)
+            try:
+                yield
+            finally:
+                with open(self._pidlist, 'wb') as f:
+                    f.write(pickle.dumps(self._children))
+                    f.flush()
+                    os.fsync(f.fileno())
+
     def _children_append(self, child):
         with self._mutex:
             self._children.append(child)
 
+    def _before_in_parent(self):
+        with self._mutex:
+            self._num_children = len(self._children)
+
+    def _after_in_parent(self):
+        # Busy wait for child to write pid.
+        while True:
+            with self._mutex:
+                num_children = len(self._children)
+                if num_children != self._num_children:
+                    # Child added itself.
+                    break
+            time.sleep(0.005)
+
     def _after_in_child(self):
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.connect(self._socket)
-            sock.sendall(str(os.getpid()).encode('utf-8'))
+        with self._mutex:
+            logger.debug('Child writing process')
+            self._children.append(psutil.Process(pid=os.getpid()))
 
 
 child_manager = ChildManager()

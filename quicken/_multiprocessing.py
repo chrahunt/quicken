@@ -44,7 +44,7 @@ def run_in_process(
     if not kwargs:
         kwargs = {}
 
-    def runner():
+    def launcher():
         # multiprocessing doesn't offer a good way to detach from the parent
         # process, allowing the child to exist without being cleaned up at
         # parent close. So given
@@ -91,7 +91,7 @@ def run_in_process(
     ctx = multiprocessing.get_context('fork')
 
     child_pipe, parent_pipe = ctx.Pipe()
-    p = ctx.Process(target=runner, name=name)
+    p = ctx.Process(target=launcher, name=name)
     p.start()
 
     ready = wait([p.sentinel, parent_pipe], timeout=timeout)

@@ -229,6 +229,7 @@ def test_server_idle_timeout_is_respected():
             main_pid = str(os.getpid())
             assert runner() == 0
             first_parent_pid = output_file.read_text(encoding='utf-8')
+            assert runner() == 0
             for _i in range(3):
                 time.sleep(0.05)
                 assert runner() == 0
@@ -361,7 +362,6 @@ def test_server_reload_ok_when_server_not_up():
             runtime_dir_path=path)
         def runner():
             def inner():
-                # Get parent pid, for comparison.
                 output_file.write_text(str(os.getpid()), encoding='utf-8')
                 return 0
             return inner
@@ -371,7 +371,7 @@ def test_server_reload_ok_when_server_not_up():
         with contained_children():
             assert runner() == 0
             main_pid = str(os.getpid())
-            test_pid = output_file.read_text(encoding='utf-8').strip()
+            test_pid = output_file.read_text(encoding='utf-8')
             assert test_pid
             assert test_pid != main_pid
 

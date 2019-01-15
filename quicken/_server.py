@@ -34,7 +34,7 @@ import psutil
 
 from .__version__ import __version__
 from ._asyncio import DeadlineTimer
-from ._concurrent_futures import ProcessExecutor
+from ._concurrent_futures import AsyncProcessExecutor
 from ._debug import log_calls
 from ._multiprocessing import run_in_process, AsyncConnectionAdapter, \
     AsyncListener, ConnectionClose, ListenerStopped
@@ -226,7 +226,7 @@ class ProcessConnectionHandler(ConnectionHandler):
         self._context = context
         self._start_time = time.time()
         self._pid = os.getpid()
-        self._executor = ProcessExecutor()
+        self._executor = AsyncProcessExecutor(loop=loop)
         self._connection_finish_cv = asyncio.Condition(loop=self._loop)
         self._num_active_connections = 0
 
@@ -248,7 +248,7 @@ class ProcessConnectionHandler(ConnectionHandler):
             elif request.name == RequestTypes.run_process:
                 process_state = request.contents
                 result = await self._execute_callback(process_state)
-                logger.debug('Result: %s', result)
+                logger.debug('Process result: %s', result)
                 await connection.send(Response(result))
         self._num_active_connections -= 1
         async with self._connection_finish_cv:
@@ -274,7 +274,7 @@ class ProcessConnectionHandler(ConnectionHandler):
     async def handle_shutdown(self):
         """Shutdown executor"""
         # Waits for all processes to finish.
-        self._executor.shutdown()
+        await self._executor.async_shutdown()
         # Wait for handling of all connections to be done.
         async with self._connection_finish_cv:
             await self._connection_finish_cv.wait_for(
@@ -283,7 +283,7 @@ class ProcessConnectionHandler(ConnectionHandler):
 
 class Server:
     """A multiprocessing.Connection server.Server accepts new connections and dispatches handling of requests to
-     the ProcessExecutor.
+     the AsyncProcessExecutor.
 
     Per https://bugs.python.org/issue21998 asyncio is not fork-safe, so we spawn
     an executor prior to the starting of the event loop which has essentially
