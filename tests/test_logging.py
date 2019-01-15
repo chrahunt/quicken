@@ -1,7 +1,7 @@
 import io
 import logging
 
-from quicken.logging import reset_loggers
+from quicken._protocol import ProcessState
 
 
 def test_logging_stream_override_works():
@@ -13,6 +13,6 @@ def test_logging_stream_override_works():
 
     new_stdout = io.StringIO()
     new_stderr = io.StringIO()
-    reset_loggers(new_stdout, new_stderr)
+    ProcessState._reset_loggers(new_stdout, new_stderr)
     logger.debug('Example message')
     assert 'Example message' in new_stderr.getvalue()

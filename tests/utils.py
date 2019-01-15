@@ -1,21 +1,19 @@
 from contextlib import contextmanager
 import logging
-import logging.config
 import os
 from pathlib import Path
+import pickle
 import re
-import socket
-import socketserver
 import sys
 import tempfile
-import threading
 import time
 from typing import Any, ContextManager, List
-import uuid
 
+from fasteners import InterProcessLock
 import psutil
 
-from quicken.fd import max_pid_len
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -37,7 +35,14 @@ def isolated_filesystem() -> ContextManager[Path]:
 
 @contextmanager
 def env(**kwargs) -> ContextManager:
-    """Update environment within context manager.
+    """Update environment only within context manager.
+
+    Args:
+        kwargs: Key-value pairs corresponding to environment variables to set in
+            the with block. If an argument is set to `None` then the environment
+            variable is removed. Only the provided environment variables are
+            changed, any changes made to other environment variables in the with
+            block are not undone.
     """
     def update(target, source):
         updated = {}
@@ -61,12 +66,25 @@ def env(**kwargs) -> ContextManager:
 
 @contextmanager
 def argv(args: List[str]) -> ContextManager:
+    """Set argv within the context.
+    """
     argv = sys.argv
     sys.argv = args
     try:
         yield
     finally:
         sys.argv = argv
+
+
+@contextmanager
+def umask(umask: int) -> ContextManager:
+    """Set umask within the context.
+    """
+    umask = os.umask(umask)
+    try:
+        yield
+    finally:
+        os.umask(umask)
 
 
 @contextmanager
@@ -85,35 +103,19 @@ def patch_attribute(obj: Any, attr: str, new_attr: Any):
 class ChildManager:
     """Register children with the eldest parent process.
 
-    We do this instead of recursively getting children because intermediate
-    processes may have already died.
+    We do this instead of recursively getting children with psutil because
+    intermediate processes may have already exited.
     """
     def __init__(self):
         self._tempdir = tempfile.mkdtemp()
-        self._id = str(uuid.uuid4())
-        self._socket = f'{self._tempdir}/socket'
-        self._mutex = threading.Lock()
+        self._pidlist = f'{self._tempdir}/pids'
+        self._lock = InterProcessLock(self._pidlist)
         self._children = []
-        os.register_at_fork(after_in_child=self.after_in_child)
-        self._serve()
-
-    def _serve(self):
-        class Server(
-            socketserver.UnixStreamServer, socketserver.ThreadingMixIn):
-            pass
-
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(_self):
-                pid = int(_self.request.recv(max_pid_len).decode('utf-8'))
-                self.children_append(psutil.Process(pid=pid))
-
-        server = Server(self._socket, Handler)
-        t = threading.Thread(target=server.serve_forever, daemon=True)
-        t.start()
-
-    def children_append(self, child):
-        with self._mutex:
-            self._children.append(child)
+        self._num_children = 0
+        os.register_at_fork(
+            before=self._before_in_parent,
+            after_in_parent=self._after_in_parent,
+            after_in_child=self._after_in_child)
 
     def children_pop_all(self):
         with self._mutex:
@@ -121,24 +123,63 @@ class ChildManager:
             self._children = []
         return l
 
-    def after_in_child(self):
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.connect(self._socket)
-            sock.sendall(str(os.getpid()).encode('utf-8'))
+    def active_children(self):
+        with self._mutex:
+            return list(self._children)
+
+    @property
+    @contextmanager
+    def _mutex(self):
+        """IPC lock on pidlist and save/load _children member.
+        """
+        with self._lock:
+            contents = Path(self._pidlist).read_bytes()
+            if contents:
+                self._children = pickle.loads(contents)
+            try:
+                yield
+            finally:
+                with open(self._pidlist, 'wb') as f:
+                    f.write(pickle.dumps(self._children))
+                    f.flush()
+                    os.fsync(f.fileno())
+
+    def _children_append(self, child):
+        with self._mutex:
+            self._children.append(child)
+
+    def _before_in_parent(self):
+        with self._mutex:
+            self._num_children = len(self._children)
+
+    def _after_in_parent(self):
+        # Busy wait for child to write pid.
+        while True:
+            with self._mutex:
+                num_children = len(self._children)
+                if num_children != self._num_children:
+                    # Child added itself.
+                    break
+            time.sleep(0.005)
+
+    def _after_in_child(self):
+        with self._mutex:
+            logger.debug('Child writing process')
+            self._children.append(psutil.Process(pid=os.getpid()))
 
 
 child_manager = ChildManager()
 
 
 @contextmanager
-def contained_children(timeout=1) -> ContextManager:
+def contained_children(timeout=1, assert_graceful=True) -> ContextManager:
     """Automatically kill any Python processes forked in this context, for
     cleanup. Handles any descendents.
 
     Timeout is seconds to wait for graceful termination before killing children.
     """
     try:
-        yield
+        yield child_manager
     finally:
         procs = child_manager.children_pop_all()
         for p in procs:
@@ -147,58 +188,22 @@ def contained_children(timeout=1) -> ContextManager:
             except psutil.NoSuchProcess:
                 pass
         gone, alive = psutil.wait_procs(procs, timeout=timeout)
+        num_alive = len(alive)
         for p in alive:
+            logger.warning('Cleaning up child: %d', p.pid)
             p.kill()
+        if assert_graceful:
+            assert not num_alive, \
+                f'Unexpected children still alive: {alive}'
 
 
 _name_re = re.compile(r'(?P<file>.+?)::(?P<name>.+?) \(.*\)$')
 def current_test_name():
-    name = os.environ['PYTEST_CURRENT_TEST']
+    try:
+        name = os.environ['PYTEST_CURRENT_TEST']
+    except KeyError:
+        return '<outside test>'
     m = _name_re.match(name)
     if not m:
         raise RuntimeError(f'Could not extract name from {name}')
     return m.group('name')
-
-
-def setup_logging() -> None:
-    class UTCFormatter(logging.Formatter):
-        converter = time.gmtime
-
-    class TestNameAdderFilter(logging.Filter):
-        def filter(self, record):
-            record.test_name = os.environ['PYTEST_CURRENT_TEST']
-            record.pid = os.getpid()
-            return True
-
-    logging.config.dictConfig({
-        'version': 1,
-        'disable_existing_loggers': True,
-        'filters': {
-            'test_name': {
-                '()': TestNameAdderFilter,
-                'name': 'test_name',
-            },
-        },
-        'formatters': {
-            'default': {
-                '()': UTCFormatter,
-                'format': '#### [{asctime}][{levelname}][{pid}][{test_name}->{name}]\n    {message}',
-                'style': '{',
-            }
-        },
-        'handlers': {
-            'file': {
-                '()': 'logging.FileHandler',
-                'level': 'DEBUG',
-                'filename': 'pytest.log',
-                'filters': ['test_name'],
-                'encoding': 'utf-8',
-                'formatter': 'default',
-            }
-        },
-        'root': {
-            'filters': ['test_name'],
-            'handlers': ['file'],
-            'level': 'DEBUG',
-        }
-    })

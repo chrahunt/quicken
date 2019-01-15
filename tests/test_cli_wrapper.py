@@ -1,32 +1,42 @@
+import atexit
 import json
 import logging
 from multiprocessing import active_children, Process, Pipe
 import os
+from pathlib import Path
+import stat
 import sys
 import time
 
-from quicken import cli_factory
-from quicken.constants import pid_file_name
-from quicken.xdg import RuntimeDir
+import psutil
+import pytest
+
+from quicken import __version__, cli_factory as _cli_factory
+from quicken._constants import server_state_name, socket_name
+from quicken._xdg import RuntimeDir
 
 from .utils import (
     argv, contained_children, current_test_name, env, isolated_filesystem,
-    setup_logging)
-
-
-setup_logging()
+    umask)
 
 
 logger = logging.getLogger(__name__)
 
 
-def test_function_is_run_using_daemon():
+def cli_factory(*args, **kwargs):
+    #return _cli_factory(*args, **kwargs)
+    log_file = Path('logs').absolute() / f'{current_test_name()}-server.log'
+    kwargs['log_file'] = log_file
+    return _cli_factory(*args, **kwargs)
+
+
+def test_function_is_run_using_server():
     # Given a function decorated with cli_factory
-    # And daemon is not up
+    # And server is not up
     # When the decorated function is executed
     # And the decorated function is executed again
-    # Then it should be executed using the daemon
-    # And it should be executed using the same daemon
+    # Then it should be executed using the server
+    # And it should be executed using the same server
     with isolated_filesystem() as path:
         @cli_factory(current_test_name())
         def runner():
@@ -56,13 +66,13 @@ def test_function_is_run_using_daemon():
             assert runner_pid_1 != runner_pid_2
 
 
-def test_daemon_runner_inherits_std_streams():
+def test_runner_inherits_std_streams():
     ...
 
 
-def test_daemon_runner_inherits_environment():
+def test_runner_inherits_environment():
     # Given a command that depends on an environment variable TEST
-    # And the daemon is up and has an inherited environment value TEST=1
+    # And the server is up and has an inherited environment value TEST=1
     # And the client is executed with TEST=2 in its environment
     # When the decorated function is executed
     # Then the command should see TEST=2 in its environment
@@ -95,7 +105,7 @@ def test_daemon_runner_inherits_environment():
                 assert value == '2'
 
 
-def test_daemon_runner_inherits_args():
+def test_runner_inherits_args():
     with isolated_filesystem() as path:
         @cli_factory(current_test_name())
         def runner():
@@ -129,7 +139,7 @@ def test_daemon_runner_inherits_args():
                 assert value == args
 
 
-def test_daemon_runner_inherits_cwd():
+def test_runner_inherits_cwd():
     with isolated_filesystem() as path:
         @cli_factory(current_test_name())
         def runner():
@@ -160,18 +170,36 @@ def test_daemon_runner_inherits_cwd():
                 assert path_1 != path_2
 
 
-def test_daemon_runner_inherits_umask():
-    ...
+def test_runner_inherits_umask():
+    # Given the server is processing a command.
+    # And the client has a umask of 077
+    # When the runner process creates files
+    # Then they should have permission 700
+    with isolated_filesystem() as path:
+        @cli_factory(current_test_name())
+        def runner():
+            def inner():
+                output_path.touch(0o777)
+            return inner
+
+        output_path = path / 'output.txt'
+
+        with contained_children():
+            with umask(0o077):
+                assert runner() == 0
+            result = output_path.stat()
+            user_rwx = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
+            assert stat.S_IMODE(result.st_mode) == user_rwx
 
 
-def test_client_receiving_signals_forwards_to_daemon():
-    # Given the daemon is processing a command
+def test_client_receiving_signals_forwards_to_runner():
+    # Given the server is processing a command in a subprocess.
     # And the client receives one of:
     # - SIGINT
     # - SIGQUIT
     # - SIGSTOP
     # - SIGTERM
-    # Then the same signal should be sent to the process running the command
+    # Then the same signal should be sent to the subprocess running the command
     ...
 
 
@@ -184,6 +212,7 @@ def test_server_idle_timeout_is_respected():
     # And the server should shut down 100ms after the last request
     with isolated_filesystem() as path:
         idle_timeout = 0.1
+
         @cli_factory(
             current_test_name(), runtime_dir_path=path,
             server_idle_timeout=idle_timeout)
@@ -200,6 +229,7 @@ def test_server_idle_timeout_is_respected():
             main_pid = str(os.getpid())
             assert runner() == 0
             first_parent_pid = output_file.read_text(encoding='utf-8')
+            assert runner() == 0
             for _i in range(3):
                 time.sleep(0.05)
                 assert runner() == 0
@@ -222,6 +252,7 @@ def test_server_idle_timeout_acknowledges_active_children():
     # And the server should shut down 100ms after the last request
     with isolated_filesystem() as path:
         idle_timeout = 0.1
+
         @cli_factory(
             current_test_name(), runtime_dir_path=path,
             server_idle_timeout=idle_timeout)
@@ -254,35 +285,45 @@ def test_server_idle_timeout_acknowledges_active_children():
 def test_stale_pid_file_is_ok():
     # Given a pid_file that exists and has no existing lock by a
     #  process
-    # And the daemon is not up
+    # And the server is not up
     # When the decorated function is executed
-    # Then the daemon should be started successfully
-    # And the daemon should process the command
+    # Then the server should be started successfully
+    # And the server should process the command
     ...
 
 
 def test_leftover_socket_file_is_ok():
     # Given a socket_file that exists (and is a socket file)
-    # And the daemon is not up
+    # And the server is not up
     # When the decorated function is executed
-    # Then the daemon should be started successfully
-    # And the daemon should process the command
-    ...
+    # Then the server should be started successfully
+    # And the server should process the command
+    with isolated_filesystem() as path:
+        @cli_factory(current_test_name(), runtime_dir_path=path)
+        def runner():
+            def inner():
+                pass
+            return inner
+
+        (path / socket_name).touch()
+
+        with contained_children():
+            assert runner() == 0
 
 
-def test_daemon_reload_ok():
+def test_server_reload_ok():
     # Given the decorated function has been executed
-    # And the daemon is up
+    # And the server is up
     # When the decorated function is executed again
-    # And the function passed to the daemon_reload parameter returns True
-    # Then the daemon will be restarted
+    # And the function passed to the server_reload parameter returns True
+    # Then the server will be restarted
     # And the decorated function should be executed in process with a new parent
     with isolated_filesystem() as path:
-        def daemon_reload():
+        def sometimes_reload():
             return os.environ.get('TEST_RELOAD') is not None
 
         @cli_factory(
-            current_test_name(), reload_daemon=daemon_reload,
+            current_test_name(), reload_server=sometimes_reload,
             runtime_dir_path=path)
         def runner():
             def inner():
@@ -307,21 +348,20 @@ def test_daemon_reload_ok():
                 assert parent_pid_1 != parent_pid_2
 
 
-def test_daemon_reload_ok_when_daemon_not_up():
-    # Given the daemon is not up
-    # And function passed to the reload_daemon parameter returns True
+def test_server_reload_ok_when_server_not_up():
+    # Given the server is not up
+    # And function passed to the reload_server parameter returns True
     # When the decorated function is executed
     # Then it should be executed as expected
     with isolated_filesystem() as path:
-        def reload_daemon():
+        def always_reload():
             return True
 
         @cli_factory(
-            current_test_name(), reload_daemon=reload_daemon,
+            current_test_name(), reload_server=always_reload,
             runtime_dir_path=path)
         def runner():
             def inner():
-                # Get parent pid, for comparison.
                 output_file.write_text(str(os.getpid()), encoding='utf-8')
                 return 0
             return inner
@@ -331,15 +371,15 @@ def test_daemon_reload_ok_when_daemon_not_up():
         with contained_children():
             assert runner() == 0
             main_pid = str(os.getpid())
-            test_pid = output_file.read_text(encoding='utf-8').strip()
+            test_pid = output_file.read_text(encoding='utf-8')
             assert test_pid
             assert test_pid != main_pid
 
 
-def test_daemon_reload_ok_when_stale_pidfile_exists():
+def test_server_reload_ok_when_stale_pidfile_exists():
     # Given a stale pid file exists in the runtime directory
-    # And a daemon is not up (i.e. no lock on pid file)
-    # And the function passed to the daemon_reload parameter returns True
+    # And a server is not up (i.e. no lock on pid file)
+    # And the function passed to the reload_server parameter returns True
     # When the decorated function is executed
     # Then the contained pid should not be killed
     # And the function should be executed as expected
@@ -350,11 +390,11 @@ def test_daemon_reload_ok_when_stale_pidfile_exists():
             conn.recv()
             conn.close()
 
-        def daemon_reload():
+        def always_reload():
             return True
 
         @cli_factory(
-            current_test_name(), reload_daemon=daemon_reload,
+            current_test_name(), reload_server=always_reload,
             runtime_dir_path=path)
         def runner():
             def inner():
@@ -372,36 +412,41 @@ def test_daemon_reload_ok_when_stale_pidfile_exists():
             p.start()
             worker_pid = str(p.pid)
             runtime_dir = RuntimeDir(dir_path=path)
-            pid_file = runtime_dir.path(pid_file_name)
-            pid_file.write_text(worker_pid, encoding='utf-8')
+            process = psutil.Process(pid=p.pid)
+            state_file = runtime_dir.path(server_state_name)
+            state_file.write_text(json.dumps({
+                'create_time': process.create_time(),
+                'pid': p.pid,
+                'version': __version__,
+            }), encoding='utf-8')
 
             assert runner() == 0
-            # Make sure the same pid file was used for the daemon.
+            # Make sure the same pid file was used for the server.
             main_pid = str(os.getpid())
             runner_parent_pid = output_file.read_text(encoding='utf-8')
             assert runner_parent_pid.strip() != main_pid
             assert runner_parent_pid.strip() != ''
-            daemon_pid = pid_file.read_text(encoding='utf-8').strip()
-            assert daemon_pid == runner_parent_pid
-            assert worker_pid != daemon_pid
+            server_info = json.loads(state_file.read_text(encoding='utf-8'))
+            assert str(server_info['pid']) == runner_parent_pid
+            assert worker_pid != str(server_info['pid'])
             parent_conn.send(1)
             p.join()
             # Must not have been killed.
             assert p.exitcode == 0
 
 
-def test_daemon_bypass_ok():
-    # Given the daemon_bypass decorator parameter is True
-    # And the daemon is up
+def test_server_bypass_ok():
+    # Given the server_bypass decorator parameter is True
+    # And the server is up
     # When the decorated function is executed
-    # Then the daemon should not receive the command
+    # Then the server should not receive the command
     # And the command should be processed
     with isolated_filesystem() as path:
-        def bypass_daemon():
+        def bypass_server():
             return True
 
         @cli_factory(
-            current_test_name(), bypass_daemon=bypass_daemon,
+            current_test_name(), bypass_server=bypass_server,
             runtime_dir_path=path)
         def runner():
             def inner():
@@ -421,52 +466,52 @@ def test_daemon_bypass_ok():
 
 def test_log_file_unwritable_fails_fast():
     # Given a log_file path pointing to a location that is not writable
-    # And the daemon is not up
+    # And the server is not up
     # When the decorated function is executed
     # Then an exception should be raised in the parent
-    # And the daemon must not be up
+    # And the server must not be up
     ...
 
 
-def test_daemon_start_failed_raises_exception():
+def test_server_start_failed_raises_exception():
     # Given a socket_file path pointing to a location that is not writable
-    # And the daemon is not up
+    # And the server is not up
     # When the decorated function is executed
-    # Then the daemon should fail to come up
+    # Then the server should fail to come up
     # And an exception should be raised
     ...
 
 
 def test_command_unhandled_exception_returns_nonzero():
     # Given a command that raises an unhandled exception
-    # And the daemon is up
+    # And the server is up
     # When the decorated function is executed
-    # Then the daemon should process the command
+    # Then the server should process the command
     # And return a non-zero exit code
     # And the exception should be visible in the log output
     ...
 
 
-def test_daemon_not_creating_pid_file_raises_exception():
-    # Given the daemon is not up
-    # And the daemon has been stubbed out to not create the pid file
+def test_server_not_creating_pid_file_raises_exception():
+    # Given the server is not up
+    # And the server has been stubbed out to not create the pid file
     # When the decorated function is executed
     # Then it should time out waiting for the pid file to be created and raise
     #  an exception
     ...
 
 
-def test_daemon_not_creating_socket_file_raises_exception():
-    # Given the daemon is not up
-    # And the daemon has been stubbed out to not create the socket file
+def test_server_not_creating_socket_file_raises_exception():
+    # Given the server is not up
+    # And the server has been stubbed out to not create the socket file
     # When the decorated function is executed
     # Then it should time out waiting for the socket file to be created and
     #  raise an exception
     ...
 
 
-def test_daemon_runner_fails_when_communicating_to_stopped_server():
-    # Given a daemon that is running but has received SIGSTOP
+def test_runner_fails_when_communicating_to_stopped_server():
+    # Given a server that is running but has received SIGSTOP
     # When the decorated function is executed.
     # Then the client should not hang, and should time out or throw a connection
     #  refused error.
@@ -502,3 +547,123 @@ def test_command_does_not_hang_on_first_invocation():
                 encoding='utf-8').strip().split()
             assert parent_pid_2 != main_pid
             assert parent_pid_1 == parent_pid_2
+
+
+def test_exit_code_propagated_from_function():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            return 2
+        return inner
+
+    with contained_children():
+        assert runner() == 2
+
+
+def test_exit_code_propagated_on_sys_exit():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            sys.exit(3)
+        return inner
+
+    with contained_children():
+        assert runner() == 3
+
+
+def test_exit_code_propagated_on_sys_exit_0():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            sys.exit(0)
+        return inner
+
+    with contained_children():
+        assert runner() == 0
+
+
+def test_exit_code_propagated_on_sys_exit_none():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            sys.exit()
+        return inner
+
+    with contained_children():
+        assert runner() == 0
+
+
+def test_exit_code_propagated_on_os__exit():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            os._exit(4)
+        return inner
+
+    with contained_children():
+        assert runner() == 4
+
+
+def test_exit_code_propagated_on_exception():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            raise RuntimeError('expected')
+        return inner
+
+    with contained_children():
+        assert runner() == 1
+
+
+def test_exit_code_propagated_on_atexit_sys_exit():
+    # sys.exit has no effect when invoked from an atexit handler.
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            def func():
+                sys.exit(5)
+            atexit.register(func)
+        return inner
+
+    with contained_children():
+        assert runner() == 0
+
+
+# multiprocessing does not support `atexit`.
+@pytest.mark.skip
+def test_exit_code_propagated_on_atexit_exception():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            def func():
+                raise RuntimeError('expected')
+            atexit.register(func)
+        return inner
+
+    with contained_children():
+        assert runner() == 1
+
+
+# This case is unsupported because multiprocessing exits the process using
+# os._exit, which bypasses calling atexit-registered handlers.
+@pytest.mark.skip
+def test_exit_code_propagated_on_atexit_os__exit():
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            def func():
+                os._exit(3)
+            atexit.register(func)
+        return inner
+
+    with contained_children():
+        assert runner() == 3
+
+
+def test_exit_code_propagated_when_server_gets_sigterm():
+    # Given the server is running
+    # And is processing a request
+    # When the server receives sigterm
+    # Then it will finish processing the request
+    # And send the correct exit code
+    ...

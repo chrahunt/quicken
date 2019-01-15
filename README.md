@@ -27,10 +27,12 @@ def main():
 That's it! The first time `main()` is invoked a server will be created and
 stay up even after the process finishes. When another process starts up it
 will request the server to execute `cli` instead of reloading all modules
-(and dependencies) from disk.
+(and dependencies) from disk. This relies on the speed of `fork` being lower
+than the startup time of a typical cli application.
 
 If `python -c ''` takes 10ms, this module takes around 40ms. That's how
-fast your command-line apps can start every time (after the first 😉).
+fast your command-line apps can start every time after the server is up.
+
 
 # Why
 

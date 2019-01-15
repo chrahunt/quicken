@@ -3,9 +3,9 @@ import os
 import threading
 import time
 
-from quicken.xdg import RuntimeDir
-from quicken.watch import wait_for_create, wait_for_delete
+from quicken._xdg import RuntimeDir
 
+from .watch import wait_for_create, wait_for_delete
 from .utils import isolated_filesystem
 
 
