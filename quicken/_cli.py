@@ -26,6 +26,10 @@ CliFactoryDecoratorT = Callable[[CliFactoryT], NoneFunction]
 BoolProvider = Callable[[], bool]
 
 
+class QuickenError(Exception):
+    pass
+
+
 def cli_factory(
         name: str,
         runtime_dir_path: Optional[str] = None,
@@ -55,7 +59,8 @@ def cli_factory(
             or `/tmp/quicken-{name}-{uid}`. If the directory exists it must be
             owned by the current user and have permissions 700.
         log_file: optional log file used by the server, must be absolute path
-            since the server base directory is `/`. Default is `~/.daemon-{name}.log`.
+            since the server base directory is `/`. Default is
+            `~/.daemon-{name}.log`.
         daemon_start_timeout: time in seconds to wait for daemon to start before
             falling back to executing function normally.
         daemon_stop_timeout: time in seconds to wait for daemon to start before
@@ -68,7 +73,7 @@ def cli_factory(
             the function.
 
     Throws:
-        QuickenError: If any directory used by runtime_dir does not have the
+        QuickCliError: If any directory used by runtime_dir does not have the
             correct permissions.
     """
     def inner_cli_factory(factory_fn: CliFactoryT) -> NoneFunction:

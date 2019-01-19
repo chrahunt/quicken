@@ -267,6 +267,7 @@ class ProcessConnectionHandler(ConnectionHandler):
                     e.args = (0,)
                     e.code = 0
                 raise
+
         result = await asyncio.get_running_loop().run_in_executor(
             self._executor, setup_child)
         return result.exitcode

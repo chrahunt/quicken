@@ -28,6 +28,8 @@ class AsyncProcessExecutor(concurrent.futures.Executor):
     to what is pickle-able.
 
     Instead of the result of the function we return a CompletedProcess.
+
+    Not thread-safe.
     """
     def __init__(self, loop=None):
         if loop is None:

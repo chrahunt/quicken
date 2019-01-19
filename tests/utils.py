@@ -87,19 +87,6 @@ def umask(umask: int) -> ContextManager:
         os.umask(umask)
 
 
-@contextmanager
-def patch_attribute(obj: Any, attr: str, new_attr: Any):
-    """Patch attribute on an object then revert.
-    """
-    old_attr = getattr(obj, attr)
-    setattr(obj, attr, new_attr)
-    new_attr._attr = old_attr
-    try:
-        yield
-    finally:
-        setattr(obj, attr, old_attr)
-
-
 class ChildManager:
     """Register children with the eldest parent process.
 
