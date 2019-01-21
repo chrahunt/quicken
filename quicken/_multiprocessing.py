@@ -258,7 +258,7 @@ class AsyncListener:
             self._listener = multiprocessing.connection.Listener(address)
         assert len(sockets) == 1, 'Only one socket should have been created'
         self._socket = sockets[0]
-        logger.debug('Listener (%d)', self._socket.fileno())
+        logger.debug('Started listener (%d)', self._socket.fileno())
         self._accepting = True
         self._attached = False
         self._shutdown = False

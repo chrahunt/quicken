@@ -1,3 +1,38 @@
+"""Primary tests of CLI wrapper functionality.
+
+The purpose of the library is to transparently start a server that runs the
+provided function in response to client requests.
+
+Our tests generally follow the format:
+
+```python
+def test_something():
+    # Gherkin-like high-level description of what the test steps look like.
+
+    @cli_factory(test_function_name())
+    # This is the function that gets executed. The library transparently runs
+    # the returned function in the server. On the test side invoking this
+    # function should return the expected return  value of 'inner'.
+    def runner():
+        # This is the function that actually gets executed by the server and
+        # will run in a separate process.
+        def inner():
+            # Write to file or do something that can be checked in the original
+            # test process.
+            ...
+
+        # This is the return value consumed by the library.
+        return inner
+
+    # Ensures that a failing test doesn't leave the server or any handler
+    # processes running.
+    with contained_children():
+        assert runner() == 0
+        # Next check whether whatever was written by the `inner` function is
+        # as expected.
+        ...
+```
+"""
 import atexit
 import json
 import logging
@@ -8,33 +43,49 @@ import signal
 import socket
 import stat
 import sys
+import tempfile
 import time
 
 import psutil
 import pytest
-from pytest_mock import mocker
 
 from quicken import __version__, cli_factory as _cli_factory, QuickenError
 from quicken._constants import server_state_name, socket_name
+from quicken._signal import forwarded_signals
 from quicken._xdg import RuntimeDir
 
 from .utils import (
-    argv, contained_children, current_test_name, env, isolated_filesystem,
-    umask)
+    argv, captured_std_streams, contained_children, current_test_name, env,
+    isolated_filesystem, kill_children, preserved_signals, umask)
+from .watch import wait_for_create
 
 
 logger = logging.getLogger(__name__)
 
 
+log_dir = Path('logs').absolute()
+
+
 def cli_factory(*args, **kwargs):
-    log_file = Path('logs').absolute() / f'{current_test_name()}-server.log'
+    """Test function wrapper.
+    """
+    # Consistent log file naming for server output.
+    log_file = log_dir / f'{current_test_name()}-server.log'
     kwargs['log_file'] = log_file
-    return _cli_factory(*args, **kwargs)
+    # Preserve normal signal handlers in callback function so it does not bleed
+    # into forked processes between multiple tests.
+    def wrapper(func):
+        def execute_with_preserved_signals():
+            with preserved_signals():
+                return func()
+        return _cli_factory(*args, **kwargs)(execute_with_preserved_signals)
+
+    return wrapper
 
 
 def test_function_is_run_using_server():
     # Given a function decorated with cli_factory
-    # And server is not up
+    # And the server is not up
     # When the decorated function is executed
     # And the decorated function is executed again
     # Then it should be executed using the server
@@ -70,7 +121,29 @@ def test_function_is_run_using_server():
 
 
 def test_runner_inherits_std_streams():
-    ...
+    # Given the server is not up
+    # And the standard streams have been overridden
+    error_text = 'hello world'
+    stdout_text = f'stdout : {error_text}'
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            content = sys.stdin.read()
+            sys.stdout.write(stdout_text)
+            raise RuntimeError(content)
+        return inner
+
+    with contained_children():
+        with captured_std_streams() as (stdin, stdout, stderr):
+            stdin.write(error_text)
+            # Allow read in child to complete.
+            stdin.close()
+            assert runner() == 1
+        stdout_output = stdout.read()
+        stderr_output = stderr.read()
+        assert error_text in stderr_output
+        assert 'Traceback' in stderr_output
+        assert stdout_output == stdout_text
 
 
 def test_runner_inherits_environment():
@@ -195,40 +268,135 @@ def test_runner_inherits_umask():
             assert stat.S_IMODE(result.st_mode) == user_rwx
 
 
-@pytest.mark.skip(reason='signals not currently forwarded')
+@pytest.mark.timeout(5, callback=kill_children)
 def test_client_receiving_signals_forwards_to_runner():
     # Given the server is processing a command in a subprocess.
-    # And the client a signal (except SIGSTOP/SIGKILL)
+    # And the client receives a basic signal (i.e. any except SIGSTOP, SIGKILL,
+    #  SIGT*)
     # Then the same signal should be sent to the subprocess running the command
     pid = os.getpid()
-    all_signals = set(
-        getattr(signal, s)
-        for s in dir(signal) if s.startswith('SIG') and '_' not in s)
-    test_signals = all_signals - {signal.SIGSTOP, signal.SIGKILL}
 
-    # For convenience we get the process to send signals to the client which
-    # should them send them back to the process.
+    def to_string(signals):
+        return ','.join(
+            str(int(s)) for s in sorted(signals))
+
+    # Omit SIGT* to avoid stopping the test.
+    test_signals = forwarded_signals - {
+        signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU
+    }
+
+    # For convenience we get the process itself to send signals to the client
+    # which then sends them back to the process.
     @cli_factory(current_test_name())
     def runner():
         def inner():
-            signal.pthread_sigmask(signal.SIG_BLOCK, range(1, signal.NSIG))
-            # Set handler for all signals otherwise they do not get added to
-            # set, per sigpending(2).
+            # Block signals unconditionally to avoid them impacting our return
+            # code.
+            signal.pthread_sigmask(signal.SIG_SETMASK, test_signals)
             for sig in test_signals:
-                signal.signal(sig, lambda _num, _frame: ...)
                 os.kill(pid, sig)
 
             received_signals = signal.sigpending()
+            while received_signals != test_signals:
+                result = signal.sigtimedwait(forwarded_signals, 0.1)
+                if result is not None:
+                    received_signals.add(result.si_signo)
+
             output_path.write_text(
-                ','.join(sorted(received_signals)), encoding='utf-8')
+                to_string(received_signals), encoding='utf-8')
 
         return inner
 
     with isolated_filesystem() as path:
         output_path = Path(path) / 'output.txt'
-        assert runner() == 0
-        traced_signals = output_path.read_text(encoding='utf-8')
-        assert traced_signals == ','.join(sorted(test_signals))
+
+        with contained_children():
+            assert runner() == 0
+            traced_signals = output_path.read_text(encoding='utf-8')
+            assert traced_signals == to_string(test_signals)
+
+
+@pytest.mark.timeout(5, callback=kill_children)
+def test_client_receiving_tstp_ttin_stops_itself():
+    # Given the server is processing a command in a subprocess
+    # When the client receives signal.SIGTSTP or signal.SIGTTIN
+    # Then the same signal should be sent to the subprocess running the command
+    # And the client should be stopped
+
+    test_signals = [signal.SIGTSTP, signal.SIGTTIN]
+
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            # Block signals we expect to receive
+            signal.pthread_sigmask(signal.SIG_BLOCK, test_signals)
+            # Save our pid so it is accessible to the test process, avoiding
+            # any race conditions where the file may be empty.
+            pid = os.getpid()
+            fd, path = tempfile.mkstemp()
+            os.write(fd, str(pid).encode('utf-8'))
+            os.fsync(fd)
+            os.close(fd)
+            os.rename(path, runner_pid_file)
+
+            for sig in test_signals:
+                logger.debug('Waiting for %s', sig)
+                signal.sigwait({sig})
+                # Stop self to indicate success to test process.
+                os.kill(pid, signal.SIGSTOP)
+
+            logger.debug('All signals received')
+
+        return inner
+
+    def client():
+        # All the work to forward signals is done in the library.
+        sys.exit(runner())
+
+    def wait_for(predicate):
+        # Busy wait since we don't have a good way to get signalled on process
+        # status change.
+        while not predicate():
+            time.sleep(0.1)
+
+    with isolated_filesystem() as path:
+        with contained_children():
+            # Get process pids. The Process object already has the client pid,
+            # but we need to wait for the runner pid to be written to the file.
+            runner_pid_file = Path('runner_pid').absolute()
+            runtime_dir = RuntimeDir(dir_path=str(path))
+            p = Process(target=client)
+            p.start()
+            assert wait_for_create(
+                runtime_dir.path(runner_pid_file.name), timeout=2), \
+                f'{runner_pid_file} must have been created'
+            runner_pid = int(runner_pid_file.read_text(encoding='utf-8'))
+
+            # Stop and continue the client process, checking that it was
+            # correctly applied to both the client and runner processes.
+            client_process = psutil.Process(pid=p.pid)
+            runner_process = psutil.Process(pid=runner_pid)
+            for sig in [signal.SIGTSTP, signal.SIGTTIN]:
+                logger.debug('Sending %s', sig)
+                client_process.send_signal(sig)
+                logger.debug('Waiting for client to stop')
+                wait_for(
+                    lambda: client_process.status() == psutil.STATUS_STOPPED)
+                logger.debug('Waiting for runner to stop')
+                wait_for(
+                    lambda: runner_process.status() == psutil.STATUS_STOPPED)
+
+                client_process.send_signal(signal.SIGCONT)
+                logger.debug('Waiting for client to resume')
+                wait_for(
+                    lambda: client_process.status() != psutil.STATUS_STOPPED)
+                logger.debug('Waiting for runner to resume')
+                wait_for(
+                    lambda: runner_process.status() != psutil.STATUS_STOPPED)
+
+            logger.debug('Waiting for client to finish')
+            p.join()
+            assert p.exitcode == 0
 
 
 def test_killed_client_causes_handler_to_exit():
@@ -403,8 +571,8 @@ def test_server_reload_ok_when_server_not_up():
 
 
 def test_server_reload_ok_when_stale_pidfile_exists():
-    # Given a stale pid file exists in the runtime directory
-    # And a server is not up (i.e. no lock on pid file)
+    # Given an old server data file exists in the runtime directory
+    # And the server is not up (i.e. cannot be connected to)
     # And the function passed to the reload_server parameter returns True
     # When the decorated function is executed
     # Then the contained pid should not be killed
@@ -722,18 +890,25 @@ def test_exit_code_propagated_on_os__exit():
 
 
 def test_exit_code_propagated_on_exception():
+    message = 'expected_exception'
     @cli_factory(current_test_name())
     def runner():
         def inner():
-            raise RuntimeError('expected')
+            raise RuntimeError(message)
         return inner
 
     with contained_children():
-        assert runner() == 1
+        with captured_std_streams() as (_stdin, _stdout, stderr):
+            assert runner() == 1
+
+        assert message in stderr.read()
 
 
 def test_exit_code_propagated_on_atexit_sys_exit():
     # sys.exit has no effect when invoked from an atexit handler.
+    # Note that this is not really the *expected* behavior based on the
+    # documentation, see issue https://bugs.python.org/issue27035 for proposed
+    # changes.
     @cli_factory(current_test_name())
     def runner():
         def inner():

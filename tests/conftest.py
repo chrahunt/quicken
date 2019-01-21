@@ -1,16 +1,26 @@
+import atexit
+from contextlib import contextmanager
+from functools import wraps
 import logging
 import logging.config
 import os
 from pathlib import Path
+import pytest
+import signal
+import sys
 import time
+from threading import Timer
 
 import tid
 
 from .utils import current_test_name
 
 
-def setup_logging(path) -> None:
-    path = Path(path).absolute()
+log_file_format = 'logs/{test_case}.log'
+
+
+def pytest_runtest_setup(item):
+    path = Path(log_file_format.format(test_case=item.name)).absolute()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     class UTCFormatter(logging.Formatter):
@@ -65,13 +75,47 @@ def setup_logging(path) -> None:
     })
 
 
-log_file_format = 'logs/{test_case}.log'
+@contextmanager
+def blocked_signals():
+    old_signals = signal.pthread_sigmask(
+        signal.SIG_SETMASK, range(1, signal.NSIG))
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_signals)
 
 
-def pytest_runtest_setup(item):
-    #print('pytest_runtest_setup()')
-    log_file = log_file_format.format(test_case=item.name)
-    setup_logging(log_file)
+def timeout_timer(item, timeout, callback):
+    sys.stderr.write('Test timed out\n')
+    sys.stderr.flush()
+    atexit._run
+    if callback:
+        callback()
+    # TODO: Copy backtrace capability from pytest_timeout.py.
+    os._exit(1)
+
+
+# Stand-in for pytest-timeout due to
+# https://bitbucket.org/pytest-dev/pytest-timeout/issues/33/signals-should-be-blocked-in-thread-when
+# which breaks signal-related test cases.
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    marker = item.get_closest_marker('timeout')
+    if not marker:
+        yield
+        return
+
+    timeout = marker.args[0]
+    callback = marker.kwargs.get('callback')
+    with blocked_signals():
+        t = Timer(timeout, timeout_timer, [item, timeout, callback])
+        t.start()
+
+    try:
+        yield
+    finally:
+        t.cancel()
+        t.join()
 
 
 def pytest_collection_modifyitems(config, items):

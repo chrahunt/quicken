@@ -14,6 +14,7 @@ implementation and do not
 from abc import ABC, abstractmethod
 import asyncio
 from contextlib import ExitStack
+import errno
 import functools
 import json
 import logging
@@ -70,7 +71,7 @@ def run(
         Same as `open` for log file issues
         If there are any issues starting the server errors are re-raised.
     """
-    logger.debug('run()')
+    logger.debug('Starting server launcher')
 
     daemon_options = {
         # This ensures that relative files are created in the context of the
@@ -125,6 +126,14 @@ def daemonize(detach, target, daemon_options: Dict, log_file=None):
 
     detach_process_context()
 
+    # Reset signal handlers.
+    for signum in range(1, signal.NSIG):
+        try:
+            signal.signal(signum, signal.SIG_DFL)
+        except OSError as e:
+            if e.errno != errno.EINVAL:
+                raise
+
     with ctx:
         if log_file:
             _configure_logging(log_file, loglevel='DEBUG')
@@ -173,11 +182,11 @@ def _run_server(
     server = Server(
         socket_name, handler, finish_loop, server_idle_timeout, loop=loop)
 
-    def shutdown():
-        logger.debug('shutdown()')
+    def handle_sigterm():
+        logger.debug('Received SIGTERM')
         loop.create_task(server.stop())
 
-    loop.add_signal_handler(signal.SIGTERM, shutdown)
+    loop.add_signal_handler(signal.SIGTERM, handle_sigterm)
 
     done()
 
@@ -232,6 +241,28 @@ class ProcessConnectionHandler(ConnectionHandler):
 
     async def handle_connection(self, connection: AsyncConnectionAdapter):
         self._num_active_connections += 1
+        process_awaitable = None
+
+        async def handle_request(request):
+            nonlocal process_awaitable
+            if request.name == RequestTypes.get_server_state:
+                state = ServerState(self._start_time, self._pid, self._context)
+                await connection.send(Response(state))
+            elif request.name == RequestTypes.run_process:
+                process_state = request.contents
+                process_future = self._start_callback(process_state)
+                pid = process_future.process.pid
+                logger.debug('Running process in handler: %d', pid)
+                process_awaitable = asyncio.wrap_future(
+                    process_future, loop=self._loop)
+                await connection.send(Response(pid))
+            elif request.name == RequestTypes.wait_process_done:
+                assert process_awaitable is not None, \
+                    'Process must have been started'
+                result = await process_awaitable
+                logger.debug('Result: %d', result)
+                await connection.send(Response(result.exitcode))
+
         while True:
             try:
                 request: Request = await connection.recv()
@@ -242,21 +273,22 @@ class ProcessConnectionHandler(ConnectionHandler):
                 #  wait for connection close - then propagate this to the other
                 #  process.
                 break
-            if request.name == RequestTypes.get_server_state:
-                state = ServerState(self._start_time, self._pid, self._context)
-                await connection.send(Response(state))
-            elif request.name == RequestTypes.run_process:
-                process_state = request.contents
-                result = await self._execute_callback(process_state)
-                logger.debug('Process result: %s', result)
-                await connection.send(Response(result))
+            except ConnectionResetError:
+                logger.debug(
+                    'Connection reset (%d)', connection.connection.fileno())
+                break
+            else:
+                await handle_request(request)
+
         self._num_active_connections -= 1
         async with self._connection_finish_cv:
             self._connection_finish_cv.notify()
 
-    async def _execute_callback(self, process_state) -> int:
+    def _start_callback(self, process_state):
         def setup_child():
             ProcessState.apply_to_current_process(process_state)
+            # Reset authkey since we remove it for server startup.
+            multiprocessing.current_process().authkey = os.urandom(32)
             try:
                 sys.exit(self._callback())
             except SystemExit as e:
@@ -268,14 +300,16 @@ class ProcessConnectionHandler(ConnectionHandler):
                     e.code = 0
                 raise
 
-        result = await asyncio.get_running_loop().run_in_executor(
-            self._executor, setup_child)
-        return result.exitcode
+        # We submit the function directly to the executor because it's not clear
+        # that EventLoop.run_in_executor will always behave correctly, see:
+        # https://bugs.python.org/issue35792.
+        return self._executor.submit(setup_child)
 
     async def handle_shutdown(self):
         """Shutdown executor"""
-        # Waits for all processes to finish.
+        logger.debug('Waiting for all processes to finish')
         await self._executor.async_shutdown()
+        logger.debug('Waiting for all connection handling to be done')
         # Wait for handling of all connections to be done.
         async with self._connection_finish_cv:
             await self._connection_finish_cv.wait_for(
@@ -351,7 +385,7 @@ class Server:
             self._clear_idle_timer()
             # Closing the listener ensures there will be no more connections
             # queued.
-            logger.debug('Waiting for acceptor')
+            logger.debug('Waiting for listener close')
             await self._listener.close()
             logger.debug('Waiting for pending connections')
             async with self._shutdown_accept_cv:
@@ -445,4 +479,4 @@ def _configure_logging(logfile: Path, loglevel: str) -> None:
             },
         },
     })
-    logger.info('Logging configured')
+    logger.info('Server logging configured')

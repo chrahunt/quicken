@@ -1,12 +1,12 @@
 """CLI wrapper interface for starting/using server process.
 """
-# TODO: Move unnecessary imports to cli_impl.py and import only when we're
-#  actually running the server.
 from functools import wraps
 import json
 import logging
+import multiprocessing
 import os
 from pathlib import Path
+import signal
 from typing import Callable, Optional, Union
 
 from fasteners import InterProcessLock
@@ -15,6 +15,7 @@ from ._client import Client
 from ._typing import NoneFunction
 from ._constants import socket_name, server_state_name
 from ._protocol import ProcessState, Request, RequestTypes
+from ._signal import blocked_signals, forwarded_signals, SignalProxy
 from ._xdg import cache_dir, chdir, RuntimeDir
 
 
@@ -152,6 +153,10 @@ class CliServerManager:
         Returns:
             Socket connected to the server
         """
+        # In order to connect to a server started from a different process we
+        # need to have no authkey. Our careful treatment of the runtime
+        # directory should ensure we are not exposed.
+        multiprocessing.current_process()._config['authkey'] = None
         try:
             return self._get_client()
         except FileNotFoundError:
@@ -275,11 +280,22 @@ def _run_client(client: Client) -> int:
     Raises:
         ConnectionRefusedError if server is not listening/available.
     """
-    logger.debug('_run_client()')
+    logger.debug('Starting client communication')
     # Assume that we've already vetted the server and now we just need to run
     # the process.
 
-    state = ProcessState.for_current_process()
-    req = Request(RequestTypes.run_process, state)
-    response = client.send(req)
+    proxy = SignalProxy()
+    # We must block signals before requesting remote process start otherwise
+    # a user signal to the client may race with our ability to propagate it.
+    with blocked_signals(forwarded_signals):
+        state = ProcessState.for_current_process()
+        logger.debug('Requesting process start')
+        req = Request(RequestTypes.run_process, state)
+        response = client.send(req)
+        pid = response.contents
+        logger.debug('Process running with pid: %d', pid)
+        proxy.set_target(pid)
+
+    logger.debug('Waiting for process to finish')
+    response = client.send(Request(RequestTypes.wait_process_done, None))
     return response.contents
