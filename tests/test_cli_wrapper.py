@@ -120,6 +120,9 @@ def test_function_is_run_using_server():
             assert runner_pid_1 != runner_pid_2
 
 
+# This may time out if not all references to the std streams are closed in
+# the server.
+@pytest.mark.timeout(5, callback=kill_children)
 def test_runner_inherits_std_streams():
     # Given the server is not up
     # And the standard streams have been overridden
@@ -399,12 +402,50 @@ def test_client_receiving_tstp_ttin_stops_itself():
             assert p.exitcode == 0
 
 
+@pytest.mark.timeout(5, callback=kill_children)
 def test_killed_client_causes_handler_to_exit():
     # Given the server is processing a command in a subprocess.
     # And the client process is killed (receives SIGKILL and exits)
     # Then the same signal should be sent to the subprocess running the command
-    # And it should exit
-    ...
+    # And it should exit.
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            # Block just to ensure that only an unblockable signal would
+            # be able terminate the process.
+            signal.pthread_sigmask(signal.SIG_BLOCK, forwarded_signals)
+            pid = os.getpid()
+            fd, path = tempfile.mkstemp()
+            os.write(fd, str(pid).encode('utf-8'))
+            os.fsync(fd)
+            os.close(fd)
+            os.rename(path, runner_pid_file)
+            while True:
+                signal.pause()
+
+        return inner
+
+    def client():
+        signal.pthread_sigmask(signal.SIG_BLOCK, forwarded_signals)
+        sys.exit(runner())
+
+    with isolated_filesystem() as path:
+        with contained_children():
+            runner_pid_file = Path('runner_pid').absolute()
+            runtime_dir = RuntimeDir(dir_path=str(path))
+            p = Process(target=client)
+            p.start()
+            assert wait_for_create(
+                runtime_dir.path(runner_pid_file.name), timeout=2), \
+                f'{runner_pid_file} must have been created'
+            runner_pid = int(runner_pid_file.read_text(encoding='utf-8'))
+
+            client_process = psutil.Process(pid=p.pid)
+            runner_process = psutil.Process(pid=runner_pid)
+
+            client_process.kill()
+            p.join()
+            runner_process.wait()
 
 
 def test_server_idle_timeout_is_respected():
@@ -825,7 +866,8 @@ def test_command_does_not_hang_on_first_invocation():
             parent_pid_1 = output_file.read_text(
                 encoding='utf-8').strip().split()
             assert parent_pid_1 != main_pid
-            assert not active_children(), 'No active children should be present'
+            assert not active_children(), \
+                f'Active children present: {[c.pid for c in active_children()]}'
 
             assert runner() == 0
             parent_pid_2 = output_file.read_text(

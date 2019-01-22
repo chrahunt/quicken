@@ -4,6 +4,9 @@ from ._protocol import Request, Response
 
 
 class Client:
+    """Enforces a request/response protocol on top of
+    multiprocessing.connection.Client.
+    """
     def __init__(self, *args, **kwargs):
         self._client = multiprocessing.connection.Client(*args, **kwargs)
 

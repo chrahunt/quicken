@@ -6,8 +6,7 @@ import logging
 import multiprocessing
 import os
 from pathlib import Path
-import signal
-from typing import Callable, Optional, Union
+from typing import Callable, Dict, Optional, Union
 
 from fasteners import InterProcessLock
 
@@ -92,7 +91,7 @@ def cli_factory(
             log_file = Path(log_file).absolute()
 
             if bypass_server and bypass_server():
-                logger.debug('Bypassing daemon')
+                logger.debug('Bypassing server')
                 return factory_fn()()
 
             runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
@@ -103,7 +102,7 @@ def cli_factory(
                 try:
                     client = manager.connect()
                     if reload_server and reload_server():
-                        logger.debug('Reloading daemon')
+                        logger.debug('Reloading server')
                         client = manager.restart()
                     # TODO: Get server version.
                     # TODO: Get server context and kill without pid.
@@ -111,6 +110,7 @@ def cli_factory(
                     logger.warning(
                         'Failed to connect to server - executing cli directly.')
             if not client:
+                multiprocessing.current_process().authkey = os.urandom(32)
                 return factory_fn()()
             return _run_client(client)
 
@@ -120,11 +120,10 @@ def cli_factory(
 
 
 class CliServerManager:
-    """Responsible for connecting to or starting the server.
+    """Responsible for starting (if applicable) and connecting to the server.
 
-    To prevent race conditions we lock the runtime directory
-    Race conditions are prevented by locking the runtime directory during
-    connection and start.
+    Race conditions are prevented by acquiring an exclusive lock on
+    runtime_dir/admin during connection and start.
     """
     def __init__(
             self, factory_fn, runtime_dir: RuntimeDir, log_file,
@@ -142,21 +141,24 @@ class CliServerManager:
         self._log_file = log_file
         self._idle_timeout = server_idle_timeout
         self._lock = InterProcessLock('admin')
+        # We initialize the Client and Listener classes without an authkey
+        # parameter since there's no way to pre-share the secret securely
+        # between processes not part of the same process tree. However, the
+        # internal Client/Listener used as part of
+        # multiprocessing.resource_sharer DOES initialize its own Client and
+        # Listener with multiprocessing.current_process().authkey. We must have
+        # some value so we use this dummy value.
+        multiprocessing.current_process().authkey = b'0' * 32
 
     def connect(self) -> Client:
-        """Attempt to connect to the server. If connection fails then start the
-        server.
+        """Attempt to connect to the server, starting it if required.
 
         Args:
             timeout: seconds to wait for successful connection or startup
 
         Returns:
-            Socket connected to the server
+            Client connected to the server
         """
-        # In order to connect to a server started from a different process we
-        # need to have no authkey. Our careful treatment of the runtime
-        # directory should ensure we are not exposed.
-        multiprocessing.current_process()._config['authkey'] = None
         try:
             return self._get_client()
         except FileNotFoundError:
@@ -191,11 +193,16 @@ class CliServerManager:
         with chdir(self._runtime_dir):
             return Client(socket_name)
 
-    def _stop_server(self):
+    def _get_server_state(self) -> Dict:
+        """Retrieve server state data.
+        """
         with chdir(self._runtime_dir):
-            server_state = json.loads(
+            return json.loads(
                 Path(server_state_name).read_text(encoding='utf-8'))
+
+    def _stop_server(self):
         from psutil import NoSuchProcess, Process
+        server_state = self._get_server_state()
         pid = server_state['pid']
         create_time = server_state['create_time']
         try:

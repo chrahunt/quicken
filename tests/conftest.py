@@ -1,6 +1,4 @@
-import atexit
 from contextlib import contextmanager
-from functools import wraps
 import logging
 import logging.config
 import os
@@ -88,7 +86,6 @@ def blocked_signals():
 def timeout_timer(item, timeout, callback):
     sys.stderr.write('Test timed out\n')
     sys.stderr.flush()
-    atexit._run
     if callback:
         callback()
     # TODO: Copy backtrace capability from pytest_timeout.py.
