@@ -15,6 +15,7 @@ from . import _multiprocessing
 class RequestTypes:
     get_server_state = 'get_server_state'
     run_process = 'run_process'
+    wait_process_done = 'wait_process_done'
 
 
 @dataclass
@@ -80,6 +81,8 @@ class ProcessState:
     def apply_to_current_process(state: ProcessState):
         streams = state.std_streams
         __class__._reset_loggers(streams.stdout, streams.stderr)
+        sys.stdin, sys.stdout, sys.stderr = \
+            streams.stdin, streams.stdout, streams.stderr
         os.chdir(str(state.cwd))
         os.umask(state.umask)
         os.environ = copy.deepcopy(state.environment)

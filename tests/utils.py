@@ -1,13 +1,15 @@
 from contextlib import contextmanager
+import errno
 import logging
 import os
 from pathlib import Path
 import pickle
 import re
+import signal
 import sys
 import tempfile
 import time
-from typing import Any, ContextManager, List
+from typing import ContextManager, List
 
 from fasteners import InterProcessLock
 import psutil
@@ -88,16 +90,47 @@ def umask(umask: int) -> ContextManager:
 
 
 @contextmanager
-def patch_attribute(obj: Any, attr: str, new_attr: Any):
-    """Patch attribute on an object then revert.
-    """
-    old_attr = getattr(obj, attr)
-    setattr(obj, attr, new_attr)
-    new_attr._attr = old_attr
+def preserved_signals() -> ContextManager:
+    handlers = [(s, signal.getsignal(s)) for s in range(1, signal.NSIG)]
     try:
         yield
     finally:
-        setattr(obj, attr, old_attr)
+        for sig, handler in handlers:
+            try:
+                signal.signal(sig, handler)
+            except TypeError:
+                # Can happen if handler is None (seen with signal 32, 33)
+                pass
+            except OSError as e:
+                # SIGKILL/QUIT cannot be set, so just ignore.
+                if e.errno != errno.EINVAL:
+                    raise
+
+
+@contextmanager
+def captured_std_streams() -> ContextManager:
+    """Capture standard streams and provide an interface for interacting with
+    them.
+
+    Be careful with returned file objects - if stdout/stderr are read before the
+    block has exited it could block. Also if any file descriptors are left open.
+    """
+    stdin_r, stdin_w = os.pipe()
+    stdout_r, stdout_w = os.pipe()
+    stderr_r, stderr_w = os.pipe()
+    stdin_old, stdout_old, stderr_old = \
+        sys.stdin, sys.stdout, sys.stderr
+
+    sys.stdin, sys.stdout, sys.stderr = \
+        os.fdopen(stdin_r), os.fdopen(stdout_w, 'w'), os.fdopen(stderr_w, 'w')
+    try:
+        yield os.fdopen(stdin_w, 'w'), os.fdopen(stdout_r), os.fdopen(stderr_r)
+    finally:
+        os.close(stdin_r)
+        os.close(stdout_w)
+        os.close(stderr_w)
+        sys.stdin, sys.stdout, sys.stderr = \
+            stdin_old, stdout_old, stderr_old
 
 
 class ChildManager:
@@ -164,7 +197,6 @@ class ChildManager:
 
     def _after_in_child(self):
         with self._mutex:
-            logger.debug('Child writing process')
             self._children.append(psutil.Process(pid=os.getpid()))
 
 
@@ -181,20 +213,41 @@ def contained_children(timeout=1, assert_graceful=True) -> ContextManager:
     try:
         yield child_manager
     finally:
-        procs = child_manager.children_pop_all()
-        for p in procs:
-            try:
-                p.terminate()
-            except psutil.NoSuchProcess:
-                pass
-        gone, alive = psutil.wait_procs(procs, timeout=timeout)
+        alive = kill_children(timeout)
         num_alive = len(alive)
-        for p in alive:
-            logger.warning('Cleaning up child: %d', p.pid)
-            p.kill()
-        if assert_graceful:
+        # Get current exception - if something was raised we should be raising
+        # that.
+        # XXX: Need to check use cases to see if there are any cases where
+        #  we are expecting an exception outside of the 'contained_children'
+        #  block.
+        _, exc, _ = sys.exc_info()
+        if assert_graceful and exc is None:
             assert not num_alive, \
                 f'Unexpected children still alive: {alive}'
+
+
+def kill_children(timeout=1) -> List[psutil.Process]:
+    """
+    Kill any active children, returning any that were not terminated within
+    timeout.
+    Args:
+        timeout: time to wait before killing.
+
+    Returns:
+        list of processes that had to be killed forcefully.
+
+    """
+    procs = child_manager.children_pop_all()
+    for p in procs:
+        try:
+            p.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    gone, alive = psutil.wait_procs(procs, timeout=timeout)
+    for p in alive:
+        logger.warning('Cleaning up child: %d', p.pid)
+        p.kill()
+    return alive
 
 
 _name_re = re.compile(r'(?P<file>.+?)::(?P<name>.+?) \(.*\)$')

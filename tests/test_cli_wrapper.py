@@ -1,38 +1,91 @@
+"""Primary tests of CLI wrapper functionality.
+
+The purpose of the library is to transparently start a server that runs the
+provided function in response to client requests.
+
+Our tests generally follow the format:
+
+```python
+def test_something():
+    # Gherkin-like high-level description of what the test steps look like.
+
+    @cli_factory(test_function_name())
+    # This is the function that gets executed. The library transparently runs
+    # the returned function in the server. On the test side invoking this
+    # function should return the expected return  value of 'inner'.
+    def runner():
+        # This is the function that actually gets executed by the server and
+        # will run in a separate process.
+        def inner():
+            # Write to file or do something that can be checked in the original
+            # test process.
+            ...
+
+        # This is the return value consumed by the library.
+        return inner
+
+    # Ensures that a failing test doesn't leave the server or any handler
+    # processes running.
+    with contained_children():
+        assert runner() == 0
+        # Next check whether whatever was written by the `inner` function is
+        # as expected.
+        ...
+```
+"""
 import atexit
 import json
 import logging
 from multiprocessing import active_children, Process, Pipe
 import os
 from pathlib import Path
+import signal
+import socket
 import stat
 import sys
+import tempfile
 import time
 
 import psutil
 import pytest
 
-from quicken import __version__, cli_factory as _cli_factory
+from quicken import __version__, cli_factory as _cli_factory, QuickenError
 from quicken._constants import server_state_name, socket_name
+from quicken._signal import forwarded_signals
 from quicken._xdg import RuntimeDir
 
 from .utils import (
-    argv, contained_children, current_test_name, env, isolated_filesystem,
-    umask)
+    argv, captured_std_streams, contained_children, current_test_name, env,
+    isolated_filesystem, kill_children, preserved_signals, umask)
+from .watch import wait_for_create
 
 
 logger = logging.getLogger(__name__)
 
 
+log_dir = Path('logs').absolute()
+
+
 def cli_factory(*args, **kwargs):
-    #return _cli_factory(*args, **kwargs)
-    log_file = Path('logs').absolute() / f'{current_test_name()}-server.log'
+    """Test function wrapper.
+    """
+    # Consistent log file naming for server output.
+    log_file = log_dir / f'{current_test_name()}-server.log'
     kwargs['log_file'] = log_file
-    return _cli_factory(*args, **kwargs)
+    # Preserve normal signal handlers in callback function so it does not bleed
+    # into forked processes between multiple tests.
+    def wrapper(func):
+        def execute_with_preserved_signals():
+            with preserved_signals():
+                return func()
+        return _cli_factory(*args, **kwargs)(execute_with_preserved_signals)
+
+    return wrapper
 
 
 def test_function_is_run_using_server():
     # Given a function decorated with cli_factory
-    # And server is not up
+    # And the server is not up
     # When the decorated function is executed
     # And the decorated function is executed again
     # Then it should be executed using the server
@@ -41,7 +94,8 @@ def test_function_is_run_using_server():
         @cli_factory(current_test_name())
         def runner():
             def inner():
-                output_file.write_text(f'{os.getpid()} {os.getppid()}', encoding='utf-8')
+                output_file.write_text(
+                    f'{os.getpid()} {os.getppid()}', encoding='utf-8')
                 return 0
             return inner
 
@@ -66,8 +120,33 @@ def test_function_is_run_using_server():
             assert runner_pid_1 != runner_pid_2
 
 
+# This may time out if not all references to the std streams are closed in
+# the server.
+@pytest.mark.timeout(5, callback=kill_children)
 def test_runner_inherits_std_streams():
-    ...
+    # Given the server is not up
+    # And the standard streams have been overridden
+    error_text = 'hello world'
+    stdout_text = f'stdout : {error_text}'
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            content = sys.stdin.read()
+            sys.stdout.write(stdout_text)
+            raise RuntimeError(content)
+        return inner
+
+    with contained_children():
+        with captured_std_streams() as (stdin, stdout, stderr):
+            stdin.write(error_text)
+            # Allow read in child to complete.
+            stdin.close()
+            assert runner() == 1
+        stdout_output = stdout.read()
+        stderr_output = stderr.read()
+        assert error_text in stderr_output
+        assert 'Traceback' in stderr_output
+        assert stdout_output == stdout_text
 
 
 def test_runner_inherits_environment():
@@ -192,15 +271,181 @@ def test_runner_inherits_umask():
             assert stat.S_IMODE(result.st_mode) == user_rwx
 
 
+@pytest.mark.timeout(5, callback=kill_children)
 def test_client_receiving_signals_forwards_to_runner():
     # Given the server is processing a command in a subprocess.
-    # And the client receives one of:
-    # - SIGINT
-    # - SIGQUIT
-    # - SIGSTOP
-    # - SIGTERM
+    # And the client receives a basic signal (i.e. any except SIGSTOP, SIGKILL,
+    #  SIGT*)
     # Then the same signal should be sent to the subprocess running the command
-    ...
+    pid = os.getpid()
+
+    def to_string(signals):
+        return ','.join(
+            str(int(s)) for s in sorted(signals))
+
+    # Omit SIGT* to avoid stopping the test.
+    test_signals = forwarded_signals - {
+        signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU
+    }
+
+    # For convenience we get the process itself to send signals to the client
+    # which then sends them back to the process.
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            # Block signals unconditionally to avoid them impacting our return
+            # code.
+            signal.pthread_sigmask(signal.SIG_SETMASK, test_signals)
+            for sig in test_signals:
+                os.kill(pid, sig)
+
+            received_signals = signal.sigpending()
+            while received_signals != test_signals:
+                result = signal.sigtimedwait(forwarded_signals, 0.1)
+                if result is not None:
+                    received_signals.add(result.si_signo)
+
+            output_path.write_text(
+                to_string(received_signals), encoding='utf-8')
+
+        return inner
+
+    with isolated_filesystem() as path:
+        output_path = Path(path) / 'output.txt'
+
+        with contained_children():
+            assert runner() == 0
+            traced_signals = output_path.read_text(encoding='utf-8')
+            assert traced_signals == to_string(test_signals)
+
+
+@pytest.mark.timeout(5, callback=kill_children)
+def test_client_receiving_tstp_ttin_stops_itself():
+    # Given the server is processing a command in a subprocess
+    # When the client receives signal.SIGTSTP or signal.SIGTTIN
+    # Then the same signal should be sent to the subprocess running the command
+    # And the client should be stopped
+
+    test_signals = [signal.SIGTSTP, signal.SIGTTIN]
+
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            # Block signals we expect to receive
+            signal.pthread_sigmask(signal.SIG_BLOCK, test_signals)
+            # Save our pid so it is accessible to the test process, avoiding
+            # any race conditions where the file may be empty.
+            pid = os.getpid()
+            fd, path = tempfile.mkstemp()
+            os.write(fd, str(pid).encode('utf-8'))
+            os.fsync(fd)
+            os.close(fd)
+            os.rename(path, runner_pid_file)
+
+            for sig in test_signals:
+                logger.debug('Waiting for %s', sig)
+                signal.sigwait({sig})
+                # Stop self to indicate success to test process.
+                os.kill(pid, signal.SIGSTOP)
+
+            logger.debug('All signals received')
+
+        return inner
+
+    def client():
+        # All the work to forward signals is done in the library.
+        sys.exit(runner())
+
+    def wait_for(predicate):
+        # Busy wait since we don't have a good way to get signalled on process
+        # status change.
+        while not predicate():
+            time.sleep(0.1)
+
+    with isolated_filesystem() as path:
+        with contained_children():
+            # Get process pids. The Process object already has the client pid,
+            # but we need to wait for the runner pid to be written to the file.
+            runner_pid_file = Path('runner_pid').absolute()
+            runtime_dir = RuntimeDir(dir_path=str(path))
+            p = Process(target=client)
+            p.start()
+            assert wait_for_create(
+                runtime_dir.path(runner_pid_file.name), timeout=2), \
+                f'{runner_pid_file} must have been created'
+            runner_pid = int(runner_pid_file.read_text(encoding='utf-8'))
+
+            # Stop and continue the client process, checking that it was
+            # correctly applied to both the client and runner processes.
+            client_process = psutil.Process(pid=p.pid)
+            runner_process = psutil.Process(pid=runner_pid)
+            for sig in [signal.SIGTSTP, signal.SIGTTIN]:
+                logger.debug('Sending %s', sig)
+                client_process.send_signal(sig)
+                logger.debug('Waiting for client to stop')
+                wait_for(
+                    lambda: client_process.status() == psutil.STATUS_STOPPED)
+                logger.debug('Waiting for runner to stop')
+                wait_for(
+                    lambda: runner_process.status() == psutil.STATUS_STOPPED)
+
+                client_process.send_signal(signal.SIGCONT)
+                logger.debug('Waiting for client to resume')
+                wait_for(
+                    lambda: client_process.status() != psutil.STATUS_STOPPED)
+                logger.debug('Waiting for runner to resume')
+                wait_for(
+                    lambda: runner_process.status() != psutil.STATUS_STOPPED)
+
+            logger.debug('Waiting for client to finish')
+            p.join()
+            assert p.exitcode == 0
+
+
+@pytest.mark.timeout(5, callback=kill_children)
+def test_killed_client_causes_handler_to_exit():
+    # Given the server is processing a command in a subprocess.
+    # And the client process is killed (receives SIGKILL and exits)
+    # Then the same signal should be sent to the subprocess running the command
+    # And it should exit.
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            # Block just to ensure that only an unblockable signal would
+            # be able terminate the process.
+            signal.pthread_sigmask(signal.SIG_BLOCK, forwarded_signals)
+            pid = os.getpid()
+            fd, path = tempfile.mkstemp()
+            os.write(fd, str(pid).encode('utf-8'))
+            os.fsync(fd)
+            os.close(fd)
+            os.rename(path, runner_pid_file)
+            while True:
+                signal.pause()
+
+        return inner
+
+    def client():
+        signal.pthread_sigmask(signal.SIG_BLOCK, forwarded_signals)
+        sys.exit(runner())
+
+    with isolated_filesystem() as path:
+        with contained_children():
+            runner_pid_file = Path('runner_pid').absolute()
+            runtime_dir = RuntimeDir(dir_path=str(path))
+            p = Process(target=client)
+            p.start()
+            assert wait_for_create(
+                runtime_dir.path(runner_pid_file.name), timeout=2), \
+                f'{runner_pid_file} must have been created'
+            runner_pid = int(runner_pid_file.read_text(encoding='utf-8'))
+
+            client_process = psutil.Process(pid=p.pid)
+            runner_process = psutil.Process(pid=runner_pid)
+
+            client_process.kill()
+            p.join()
+            runner_process.wait()
 
 
 def test_server_idle_timeout_is_respected():
@@ -280,16 +525,6 @@ def test_server_idle_timeout_acknowledges_active_children():
             _, parent_pid = output_file.read_text(encoding='utf-8').split()
             assert parent_pid != main_pid
             assert parent_pid == first_parent_pid
-
-
-def test_stale_pid_file_is_ok():
-    # Given a pid_file that exists and has no existing lock by a
-    #  process
-    # And the server is not up
-    # When the decorated function is executed
-    # Then the server should be started successfully
-    # And the server should process the command
-    ...
 
 
 def test_leftover_socket_file_is_ok():
@@ -377,8 +612,8 @@ def test_server_reload_ok_when_server_not_up():
 
 
 def test_server_reload_ok_when_stale_pidfile_exists():
-    # Given a stale pid file exists in the runtime directory
-    # And a server is not up (i.e. no lock on pid file)
+    # Given an old server data file exists in the runtime directory
+    # And the server is not up (i.e. cannot be connected to)
     # And the function passed to the reload_server parameter returns True
     # When the decorated function is executed
     # Then the contained pid should not be killed
@@ -464,58 +699,149 @@ def test_server_bypass_ok():
             assert runner_pid.strip() == main_pid
 
 
+@pytest.mark.xfail(reason='does not fail fast')
 def test_log_file_unwritable_fails_fast():
     # Given a log_file path pointing to a location that is not writable
     # And the server is not up
     # When the decorated function is executed
     # Then an exception should be raised in the parent
     # And the server must not be up
-    ...
+    with isolated_filesystem() as path:
+        log_path = Path(path) / 'log.txt'
+        log_path.touch()
+
+        @cli_factory(current_test_name(), log_file=str(log_path))
+        def runner():
+            def inner():
+                pass
+            return inner
+
+        log_path.chmod(stat.S_IRUSR)
+
+        with contained_children():
+            with pytest.raises(QuickenError) as e:
+                runner()
+
+        assert str(log_path) in str(e)
 
 
-def test_server_start_failed_raises_exception():
-    # Given a socket_file path pointing to a location that is not writable
+@pytest.mark.xfail(reason='wrong error raised')
+def test_unwritable_runtime_dir_raises_exception():
+    # Given a runtime_dir path pointing to a location that is not writable
     # And the server is not up
     # When the decorated function is executed
     # Then the server should fail to come up
     # And an exception should be raised
-    ...
+    with isolated_filesystem() as path:
+        @cli_factory(current_test_name(), runtime_dir_path=path)
+        def runner():
+            def inner():
+                pass
+            return inner
+
+        Path(path).chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+        with contained_children():
+            with pytest.raises(QuickenError) as e:
+                runner()
 
 
-def test_command_unhandled_exception_returns_nonzero():
-    # Given a command that raises an unhandled exception
-    # And the server is up
+@pytest.mark.xfail(reason='wrong error raised')
+def test_unwritable_socket_file_raises_exception():
+    # Given a runtime_dir path pointing to a directory with an unwritable
+    #  'socket' file
+    # And the server is not up
     # When the decorated function is executed
-    # Then the server should process the command
-    # And return a non-zero exit code
-    # And the exception should be visible in the log output
-    ...
+    # Then the server should fail to come up
+    # And it should raise a QuickenError with message 'could not write socket
+    #  file' and the path.
+    with isolated_filesystem() as path:
+        @cli_factory(current_test_name(), runtime_dir_path=path)
+        def runner():
+            def inner():
+                pass
+            return inner
+
+        (Path(path) / socket_name).touch(mode=stat.S_IRUSR)
+
+        with contained_children():
+            with pytest.raises(QuickenError):
+                runner()
 
 
-def test_server_not_creating_pid_file_raises_exception():
-    # Given the server is not up
-    # And the server has been stubbed out to not create the pid file
-    # When the decorated function is executed
-    # Then it should time out waiting for the pid file to be created and raise
-    #  an exception
-    ...
-
-
-def test_server_not_creating_socket_file_raises_exception():
+@pytest.mark.xfail(reason='wrong error raised')
+def test_server_not_creating_socket_file_raises_exception(mocker):
     # Given the server is not up
     # And the server has been stubbed out to not create the socket file
     # When the decorated function is executed
     # Then it should time out waiting for the socket file to be created and
-    #  raise an exception
-    ...
+    #  raise a QuickenError with message 'timed out connecting to server'
+    mocker.patch('quicken._server.run')
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            pass
+        return inner
+
+    with contained_children():
+        with pytest.raises(QuickenError):
+            runner()
 
 
+@pytest.mark.xfail(reason='wrong error raised')
+def test_server_not_listening_on_socket_file_raises_exception(mocker):
+    # Given the server is not up
+    # And the server has been stubbed out to bind to the socket file but not
+    #  listen
+    # When the decorated function is executed
+    # Then it should raise a QuickenError with message 'failed to connect to
+    #  server'
+    run_function = mocker.patch('quicken._server.run')
+
+    def fake_listener(*_args, **_kwargs):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(socket_name)
+
+    run_function.side_effect = fake_listener
+    with isolated_filesystem() as path:
+        @cli_factory(current_test_name(), runtime_dir_path=path)
+        def runner():
+            def inner():
+                pass
+            return inner
+
+        with contained_children():
+            with pytest.raises(QuickenError) as e:
+                runner()
+
+
+@pytest.mark.skip(reason='client currently hangs')
 def test_runner_fails_when_communicating_to_stopped_server():
     # Given a server that is running but has received SIGSTOP
     # When the decorated function is executed.
-    # Then the client should not hang, and should time out or throw a connection
-    #  refused error.
-    ...
+    # Then the client should not hang
+    # And should raise a QuickenError with message 'failed to connect to server'
+    with isolated_filesystem() as path:
+        @cli_factory(current_test_name(), runtime_dir_path=path)
+        def runner():
+            def inner():
+                output_file.write_text(message, encoding='utf-8')
+            return inner
+
+        message = 'hello world'
+        output_file = Path(path) / 'output.txt'
+
+        with contained_children():
+            # Ensure server is running.
+            assert runner() == 0
+            text = output_file.read_text(encoding='utf-8')
+            assert text == message
+
+            server_state = json.loads(
+                Path(server_state_name).read_text(encoding='utf-8'))
+            os.kill(server_state['pid'], signal.SIGSTOP)
+            with pytest.raises(QuickenError):
+                runner()
 
 
 def test_command_does_not_hang_on_first_invocation():
@@ -540,7 +866,8 @@ def test_command_does_not_hang_on_first_invocation():
             parent_pid_1 = output_file.read_text(
                 encoding='utf-8').strip().split()
             assert parent_pid_1 != main_pid
-            assert not active_children(), 'No active children should be present'
+            assert not active_children(), \
+                f'Active children present: {[c.pid for c in active_children()]}'
 
             assert runner() == 0
             parent_pid_2 = output_file.read_text(
@@ -605,18 +932,25 @@ def test_exit_code_propagated_on_os__exit():
 
 
 def test_exit_code_propagated_on_exception():
+    message = 'expected_exception'
     @cli_factory(current_test_name())
     def runner():
         def inner():
-            raise RuntimeError('expected')
+            raise RuntimeError(message)
         return inner
 
     with contained_children():
-        assert runner() == 1
+        with captured_std_streams() as (_stdin, _stdout, stderr):
+            assert runner() == 1
+
+        assert message in stderr.read()
 
 
 def test_exit_code_propagated_on_atexit_sys_exit():
     # sys.exit has no effect when invoked from an atexit handler.
+    # Note that this is not really the *expected* behavior based on the
+    # documentation, see issue https://bugs.python.org/issue27035 for proposed
+    # changes.
     @cli_factory(current_test_name())
     def runner():
         def inner():
@@ -629,8 +963,7 @@ def test_exit_code_propagated_on_atexit_sys_exit():
         assert runner() == 0
 
 
-# multiprocessing does not support `atexit`.
-@pytest.mark.skip
+@pytest.mark.xfail(reason='multiprocessing does not support atexit handlers')
 def test_exit_code_propagated_on_atexit_exception():
     @cli_factory(current_test_name())
     def runner():
@@ -644,9 +977,7 @@ def test_exit_code_propagated_on_atexit_exception():
         assert runner() == 1
 
 
-# This case is unsupported because multiprocessing exits the process using
-# os._exit, which bypasses calling atexit-registered handlers.
-@pytest.mark.skip
+@pytest.mark.xfail(reason='multiprocessing does not support atexit handlers')
 def test_exit_code_propagated_on_atexit_os__exit():
     @cli_factory(current_test_name())
     def runner():
@@ -666,4 +997,12 @@ def test_exit_code_propagated_when_server_gets_sigterm():
     # When the server receives sigterm
     # Then it will finish processing the request
     # And send the correct exit code
-    ...
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            os.kill(os.getppid(), signal.SIGTERM)
+            sys.exit(5)
+        return inner
+
+    with contained_children():
+        assert runner() == 5

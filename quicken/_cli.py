@@ -1,13 +1,12 @@
 """CLI wrapper interface for starting/using server process.
 """
-# TODO: Move unnecessary imports to cli_impl.py and import only when we're
-#  actually running the server.
 from functools import wraps
 import json
 import logging
+import multiprocessing
 import os
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Dict, Optional, Union
 
 from fasteners import InterProcessLock
 
@@ -15,6 +14,7 @@ from ._client import Client
 from ._typing import NoneFunction
 from ._constants import socket_name, server_state_name
 from ._protocol import ProcessState, Request, RequestTypes
+from ._signal import blocked_signals, forwarded_signals, SignalProxy
 from ._xdg import cache_dir, chdir, RuntimeDir
 
 
@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 CliFactoryT = Callable[[], NoneFunction]
 CliFactoryDecoratorT = Callable[[CliFactoryT], NoneFunction]
 BoolProvider = Callable[[], bool]
+
+
+class QuickenError(Exception):
+    pass
 
 
 def cli_factory(
@@ -55,7 +59,8 @@ def cli_factory(
             or `/tmp/quicken-{name}-{uid}`. If the directory exists it must be
             owned by the current user and have permissions 700.
         log_file: optional log file used by the server, must be absolute path
-            since the server base directory is `/`. Default is `~/.daemon-{name}.log`.
+            since the server base directory is `/`. Default is
+            `~/.daemon-{name}.log`.
         daemon_start_timeout: time in seconds to wait for daemon to start before
             falling back to executing function normally.
         daemon_stop_timeout: time in seconds to wait for daemon to start before
@@ -68,7 +73,7 @@ def cli_factory(
             the function.
 
     Throws:
-        QuickenError: If any directory used by runtime_dir does not have the
+        QuickCliError: If any directory used by runtime_dir does not have the
             correct permissions.
     """
     def inner_cli_factory(factory_fn: CliFactoryT) -> NoneFunction:
@@ -86,7 +91,7 @@ def cli_factory(
             log_file = Path(log_file).absolute()
 
             if bypass_server and bypass_server():
-                logger.debug('Bypassing daemon')
+                logger.debug('Bypassing server')
                 return factory_fn()()
 
             runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
@@ -97,7 +102,7 @@ def cli_factory(
                 try:
                     client = manager.connect()
                     if reload_server and reload_server():
-                        logger.debug('Reloading daemon')
+                        logger.debug('Reloading server')
                         client = manager.restart()
                     # TODO: Get server version.
                     # TODO: Get server context and kill without pid.
@@ -105,6 +110,7 @@ def cli_factory(
                     logger.warning(
                         'Failed to connect to server - executing cli directly.')
             if not client:
+                multiprocessing.current_process().authkey = os.urandom(32)
                 return factory_fn()()
             return _run_client(client)
 
@@ -114,11 +120,10 @@ def cli_factory(
 
 
 class CliServerManager:
-    """Responsible for connecting to or starting the server.
+    """Responsible for starting (if applicable) and connecting to the server.
 
-    To prevent race conditions we lock the runtime directory
-    Race conditions are prevented by locking the runtime directory during
-    connection and start.
+    Race conditions are prevented by acquiring an exclusive lock on
+    runtime_dir/admin during connection and start.
     """
     def __init__(
             self, factory_fn, runtime_dir: RuntimeDir, log_file,
@@ -136,16 +141,23 @@ class CliServerManager:
         self._log_file = log_file
         self._idle_timeout = server_idle_timeout
         self._lock = InterProcessLock('admin')
+        # We initialize the Client and Listener classes without an authkey
+        # parameter since there's no way to pre-share the secret securely
+        # between processes not part of the same process tree. However, the
+        # internal Client/Listener used as part of
+        # multiprocessing.resource_sharer DOES initialize its own Client and
+        # Listener with multiprocessing.current_process().authkey. We must have
+        # some value so we use this dummy value.
+        multiprocessing.current_process().authkey = b'0' * 32
 
     def connect(self) -> Client:
-        """Attempt to connect to the server. If connection fails then start the
-        server.
+        """Attempt to connect to the server, starting it if required.
 
         Args:
             timeout: seconds to wait for successful connection or startup
 
         Returns:
-            Socket connected to the server
+            Client connected to the server
         """
         try:
             return self._get_client()
@@ -181,11 +193,16 @@ class CliServerManager:
         with chdir(self._runtime_dir):
             return Client(socket_name)
 
-    def _stop_server(self):
+    def _get_server_state(self) -> Dict:
+        """Retrieve server state data.
+        """
         with chdir(self._runtime_dir):
-            server_state = json.loads(
+            return json.loads(
                 Path(server_state_name).read_text(encoding='utf-8'))
+
+    def _stop_server(self):
         from psutil import NoSuchProcess, Process
+        server_state = self._get_server_state()
         pid = server_state['pid']
         create_time = server_state['create_time']
         try:
@@ -270,11 +287,22 @@ def _run_client(client: Client) -> int:
     Raises:
         ConnectionRefusedError if server is not listening/available.
     """
-    logger.debug('_run_client()')
+    logger.debug('Starting client communication')
     # Assume that we've already vetted the server and now we just need to run
     # the process.
 
-    state = ProcessState.for_current_process()
-    req = Request(RequestTypes.run_process, state)
-    response = client.send(req)
+    proxy = SignalProxy()
+    # We must block signals before requesting remote process start otherwise
+    # a user signal to the client may race with our ability to propagate it.
+    with blocked_signals(forwarded_signals):
+        state = ProcessState.for_current_process()
+        logger.debug('Requesting process start')
+        req = Request(RequestTypes.run_process, state)
+        response = client.send(req)
+        pid = response.contents
+        logger.debug('Process running with pid: %d', pid)
+        proxy.set_target(pid)
+
+    logger.debug('Waiting for process to finish')
+    response = client.send(Request(RequestTypes.wait_process_done, None))
     return response.contents
