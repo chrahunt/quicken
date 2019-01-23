@@ -1,0 +1,4 @@
+build:
+  image: '4.0'
+python:
+  version: '3.7'
