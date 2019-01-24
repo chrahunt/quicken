@@ -62,3 +62,9 @@ CLI tool should be able to get to work in less than 100ms.
 * Distribute your package as a wheel. When wheels are installed they create
   scripts that do not import `pkg_resources`, which can save 60ms+ depending
   on disk speed and caching.
+
+# Development
+
+```
+ln -sf ../.githooks .git/hooks
+```

@@ -1,4 +1,5 @@
+requirements_file: docs/requirements.txt
 build:
-  image: '4.0'
+  image: latest
 python:
-  version: '3.7'
+  version: '3.6'
