@@ -2,3 +2,4 @@
 set -ex
 root_dir="$(git rev-parse --show-toplevel)"
 poetry run pip freeze | grep -v '^-e' > "$root_dir/docs/requirements.txt"
+git add "$root_dir/docs/requirements.txt"
