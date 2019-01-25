@@ -1,0 +1,6 @@
+name: quicken-docs
+dependencies:
+- python=3.7
+- pip:
+  - -r
+  - docs/requirements.txt

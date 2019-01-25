@@ -94,7 +94,7 @@ def daemonize(detach, target, daemon_options: Dict, log_file=None):
         # XXX: If we do eventually want to close open files, keep in mind
         #  that it may be slow and there are platform-specific speedups we
         #  can do.
-        def patched(exclude=None):
+        def patched(**_):
             return
         daemon.daemon.close_all_open_files = patched
 
@@ -297,13 +297,13 @@ class ProcessConnectionHandler(ConnectionHandler):
             logger.debug('Cancelling request handler')
             request_handler.cancel()
 
-        async def run(coro):
+        async def loop(coro):
             while True:
                 if not await coro():
                     break
 
-        request_acceptor = asyncio.create_task(run(accept_request))
-        request_handler = asyncio.create_task(run(handle_request))
+        request_acceptor = asyncio.create_task(loop(accept_request))
+        request_handler = asyncio.create_task(loop(handle_request))
         all_tasks = asyncio.gather(request_acceptor, request_handler)
 
         try:
@@ -488,7 +488,9 @@ def _configure_logging(logfile: Path, loglevel: str) -> None:
             f'{__name__}-formatter': {
                 '()': UTCFormatter,
                 'format':
-                    '#### [{asctime}][{levelname}][{name}][{process} ({processName})][{thread} ({threadName})]\n    {message}',
+                    '#### [{asctime}][{levelname}][{name}]'
+                    '[{process} ({processName})][{thread} ({threadName})]\n'
+                    '    {message}',
                 'style': '{',
             }
         },
