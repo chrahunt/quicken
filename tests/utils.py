@@ -1,9 +1,9 @@
 from contextlib import contextmanager
 import errno
+import json
 import logging
 import os
 from pathlib import Path
-import pickle
 import re
 import signal
 import sys
@@ -143,7 +143,7 @@ class ChildManager:
         self._tempdir = tempfile.mkdtemp()
         self._pidlist = f'{self._tempdir}/pids'
         self._lock = InterProcessLock(self._pidlist)
-        self._children = []
+        self._children: List[psutil.Process] = []
         self._num_children = 0
         os.register_at_fork(
             before=self._before_in_parent,
@@ -166,16 +166,35 @@ class ChildManager:
         """IPC lock on pidlist and save/load _children member.
         """
         with self._lock:
-            contents = Path(self._pidlist).read_bytes()
+            contents = Path(self._pidlist).read_text(encoding='utf-8')
             if contents:
-                self._children = pickle.loads(contents)
+                self._children = self._deserialize_children(contents)
             try:
                 yield
             finally:
-                with open(self._pidlist, 'wb') as f:
-                    f.write(pickle.dumps(self._children))
+                with open(self._pidlist, 'w', encoding='utf-8') as f:
+                    f.write(self._serialize_children())
                     f.flush()
                     os.fsync(f.fileno())
+
+    def _serialize_children(self) -> str:
+        out = []
+        for child in self._children:
+            out.append([child.pid, child.create_time()])
+        return json.dumps(out)
+
+    def _deserialize_children(self, s) -> List[psutil.Process]:
+        children = json.loads(s)
+        out = []
+        for pid, create_time in children:
+            try:
+                process = psutil.Process(pid=pid)
+            except psutil.NoSuchProcess:
+                pass
+            else:
+                if process.create_time() == create_time:
+                    out.append(process)
+        return out
 
     def _children_append(self, child):
         with self._mutex:
