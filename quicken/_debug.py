@@ -64,6 +64,7 @@ def _handle_coroutine_function(f, name):
     async def wrapper(*args, **kwargs):
         logger.debug(f'(await) {name}()')
         return await f(*args, **kwargs)
+
     def provider(*args, **kwargs):
         logger.debug(f'(invoke) {name}()')
         return wrapper(*args, **kwargs)

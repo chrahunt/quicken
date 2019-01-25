@@ -1,5 +1,7 @@
-Welcome to quicken's documentation!
+Header
 ===================================
+
+Make CLI applications run quickly by transparently spawning a server.
 
 .. toctree::
    :maxdepth: 2
