@@ -1,5 +1,4 @@
-requirements_file: docs/requirements.txt
-build:
-  image: latest
-python:
-  version: '3.6'
+# TODO: Remove when RTD supports Python 3.7 without conda.
+#  https://github.com/rtfd/readthedocs-docker-images/pull/73
+conda:
+  file: docs/conda.yml
