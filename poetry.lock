@@ -418,6 +418,17 @@ Sphinx = ">=1.7"
 
 [[package]]
 category = "dev"
+description = "Make Sphinx better at documenting Python functions and methods"
+name = "sphinxcontrib-trio"
+optional = false
+python-versions = "*"
+version = "1.0.1"
+
+[package.dependencies]
+sphinx = "*"
+
+[[package]]
+category = "dev"
 description = "Sphinx API for Web Apps"
 name = "sphinxcontrib-websupport"
 optional = false
@@ -470,7 +481,7 @@ python-versions = "*"
 version = "1.11.1"
 
 [metadata]
-content-hash = "17e0935ef70a57a2d5040e275c7884939a96311e4c3d6343bead4a835a8ed3c7"
+content-hash = "68406a741552a3052a416f2b2487ca090ff4a13837261e71add3a6f2598c898f"
 python-versions = "^3.7"
 
 [metadata.hashes]
@@ -517,6 +528,7 @@ six = ["3350809f0555b11f552448330d0b52d5f24c91a322ea4a15ef22629740f3761c", "d16a
 snowballstemmer = ["919f26a68b2c17a7634da993d91339e288964f93c274f1343e3bbbe2096e1128", "9f3bcd3c401c3e862ec0ebe6d2c069ebc012ce142cce209c098ccb5b09136e89"]
 sphinx = ["429e3172466df289f0f742471d7e30ba3ee11f3b5aecd9a840480d03f14bcfe5", "c4cb17ba44acffae3d3209646b6baec1e215cad3065e852c68cc569d4df1b9f8"]
 sphinx-autodoc-typehints = ["19fe0b426b7c008181f67f816060da7f046bd8a42723f67a685d26d875bcefd7", "f9c06acfec80766fe8f542a6d6a042e751fcf6ce2e2711a7dc00d8b6daf8aa36"]
+sphinxcontrib-trio = ["763ff694220c9a3adfcd66598a8b6941f1e231edcdd4c1de58a4419fbf662ad8", "d1c3300a19a873d880ed04034121d3b2b22d3ac5dbff299fefa73cfc5908c507"]
 sphinxcontrib-websupport = ["68ca7ff70785cbe1e7bccc71a48b5b6d965d79ca50629606c7861a21b206d9dd", "9de47f375baf1ea07cdb3436ff39d7a9c76042c10a769c52353ec46e4e8fc3b9"]
 tblib = ["436e4200e63d92316551179dc540906652878df4ff39b43db30fcf6400444fe7", "9bae4b8c44b06af0e114bfc4d5f6aa3eafd2119af5a4dcab34f51f1665f16c59"]
 tid = ["00871627996c7a217520bce1c572b12a8d0c58d438cd988638f006b39942e46a", "22a94255339f0d4cfdd3a78cd34b3b2d1c2396e80ab56fafd79f496f3868ceac", "69bb61cbe6b6356775d80fd81993ebc5fd23ddd418d9d1f2a1bfbc254f4ddb04"]

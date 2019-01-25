@@ -29,6 +29,7 @@ pytest-asyncio = "^0.9.0"
 tid = "^0.2.0"
 watchdog = "^0.9.0"
 pytest-mock = "^1.10"
+sphinxcontrib-trio = "^1.0"
 
 [build-system]
 requires = ["poetry>=0.12"]

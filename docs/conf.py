@@ -40,6 +40,7 @@ extensions = [
     'sphinx.ext.napoleon',
     # Must be after napoleon in order to extract types.
     'sphinx_autodoc_typehints',
+    'sphinxcontrib_trio',
     'sphinx.ext.viewcode',
 ]
 

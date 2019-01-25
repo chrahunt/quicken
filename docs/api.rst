@@ -6,3 +6,4 @@ API Reference
 The main interface
 
 .. autofunction:: cli_factory
+   :decorator:

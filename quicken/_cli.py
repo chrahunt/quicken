@@ -22,24 +22,24 @@ logger = logging.getLogger(__name__)
 
 
 CliFactoryT = Callable[[], NoneFunction]
-CliFactoryDecoratorT = Callable[[CliFactoryT], NoneFunction]
 BoolProvider = Callable[[], bool]
 
 
 class QuickenError(Exception):
+    """Generic error during server start - message has details.
+    """
     pass
 
 
 def cli_factory(
         name: str,
+        *,
         runtime_dir_path: Optional[str] = None,
         log_file: Optional[str] = None,
-        server_start_timeout: float = 5.0,
-        server_stop_timeout: float = 2.0,
         server_idle_timeout: Optional[float] = None,
-        bypass_server: Optional[Union[BoolProvider, bool]] = None,
-        reload_server: Optional[Union[BoolProvider, bool]] = None,
-        ) -> CliFactoryDecoratorT:
+        bypass_server: BoolProvider = None,
+        reload_server: BoolProvider = None,
+        ):
     """Decorator to mark a function that provides the main script entry point.
 
     To benefit most from the daemon speedup, you must do required imports
@@ -58,22 +58,19 @@ def cli_factory(
             `$XDG_RUNTIME_DIR/quicken-{name}` or `$TMPDIR/quicken-{name}-{uid}`
             or `/tmp/quicken-{name}-{uid}`. If the directory exists it must be
             owned by the current user and have permissions 700.
-        log_file: optional log file used by the server, must be absolute path
-            since the server base directory is `/`. Default is
-            `~/.daemon-{name}.log`.
-        daemon_start_timeout: time in seconds to wait for daemon to start before
-            falling back to executing function normally.
-        daemon_stop_timeout: time in seconds to wait for daemon to start before
-            falling back to executing function normally.
+        log_file: optional log file used by the server, must be an absolute
+            path. If not provided the default is
+            `$XDG_CACHE_HOME/quicken-{name}/server.log` or
+            `$HOME/.cache/quicken-{name}/server.log`.
         server_idle_timeout: time in seconds after which the server will shut
             down if no requests are being processed.
         bypass_server: if True then run command directly instead of trying to
             use daemon.
-        reload_server: if True then restart the daemon process before executing
-            the function.
+        reload_server: if True then restart the server before executing the
+            function.
 
     Throws:
-        QuickCliError: If any directory used by runtime_dir does not have the
+        QuickenError: If any directory used by runtime_dir does not have the
             correct permissions.
     """
     def inner_cli_factory(factory_fn: CliFactoryT) -> NoneFunction:
