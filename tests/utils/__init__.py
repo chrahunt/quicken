@@ -1,18 +1,19 @@
-from contextlib import contextmanager
 import errno
 import json
 import logging
 import os
-from pathlib import Path
-import re
 import signal
 import sys
 import tempfile
 import time
+
+from contextlib import contextmanager
+from pathlib import Path
 from typing import ContextManager, List
 
-from fasteners import InterProcessLock
 import psutil
+
+from fasteners import InterProcessLock
 
 
 logger = logging.getLogger(__name__)
@@ -267,15 +268,3 @@ def kill_children(timeout=1) -> List[psutil.Process]:
         logger.warning('Cleaning up child: %d', p.pid)
         p.kill()
     return alive
-
-
-_name_re = re.compile(r'(?P<file>.+?)::(?P<name>.+?) \(.*\)$')
-def current_test_name():
-    try:
-        name = os.environ['PYTEST_CURRENT_TEST']
-    except KeyError:
-        return '<outside test>'
-    m = _name_re.match(name)
-    if not m:
-        raise RuntimeError(f'Could not extract name from {name}')
-    return m.group('name')

@@ -1,17 +1,26 @@
-from contextlib import contextmanager
 import logging
 import logging.config
 import os
-from pathlib import Path
-import pytest
 import signal
 import sys
 import time
+
+from contextlib import contextmanager
+from pathlib import Path
 from threading import Timer
 
-import tid
+import pytest
 
-from .utils import current_test_name
+try:
+    from tid import gettid
+except ImportError:
+    import threading
+
+    def gettid():
+        return threading.get_ident()
+
+
+from .utils.pytest import current_test_name
 
 
 log_file_format = 'logs/{test_case}.log'
@@ -32,7 +41,7 @@ def pytest_runtest_setup(item):
 
     class TidFilter(logging.Filter):
         def filter(self, record):
-            record.tid = tid.gettid()
+            record.tid = gettid()
             return True
 
     logging.config.dictConfig({

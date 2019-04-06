@@ -1,4 +1,5 @@
 import os
+
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,10 @@ import pytest
 from quicken._asyncio import AsyncProcess
 
 from .utils import isolated_filesystem
+from .utils.pytest import non_windows
+
+
+pytestmark = non_windows
 
 
 @pytest.mark.asyncio

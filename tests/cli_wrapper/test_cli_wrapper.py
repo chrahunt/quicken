@@ -1,44 +1,6 @@
-"""Primary tests of CLI wrapper functionality.
-
-The purpose of the library is to transparently start a server that runs the
-provided function in response to client requests.
-
-Our tests generally follow the format:
-
-```python
-def test_something():
-    # Gherkin-like high-level description of what the test steps look like.
-
-    @cli_factory(test_function_name())
-    # This is the function that gets executed. The library transparently runs
-    # the returned function in the server. On the test side invoking this
-    # function should return the expected return  value of 'inner'.
-    def runner():
-        # This is the function that actually gets executed by the server and
-        # will run in a separate process.
-        def inner():
-            # Write to file or do something that can be checked in the original
-            # test process.
-            ...
-
-        # This is the return value consumed by the library.
-        return inner
-
-    # Ensures that a failing test doesn't leave the server or any handler
-    # processes running.
-    with contained_children():
-        assert runner() == 0
-        # Next check whether whatever was written by the `inner` function is
-        # as expected.
-        ...
-```
-"""
-import atexit
 import json
 import logging
-from multiprocessing import active_children, Process, Pipe
 import os
-from pathlib import Path
 import signal
 import socket
 import stat
@@ -46,41 +8,29 @@ import sys
 import tempfile
 import time
 
+from multiprocessing import active_children, Process, Pipe
+from pathlib import Path
+
 import psutil
 import pytest
 
-from quicken import __version__, cli_factory as _cli_factory, QuickenError
+from quicken import __version__, QuickenError
 from quicken._constants import server_state_name, socket_name
 from quicken._signal import forwarded_signals
 from quicken._xdg import RuntimeDir
 
-from .utils import (
-    argv, captured_std_streams, contained_children, current_test_name, env,
-    isolated_filesystem, kill_children, preserved_signals, umask)
-from .watch import wait_for_create
+from . import cli_factory
+from ..utils import (
+    argv, captured_std_streams, contained_children, env,
+    isolated_filesystem, kill_children, umask)
+from ..utils.pytest import current_test_name, non_windows
+from ..watch import wait_for_create
+
+
+pytestmark = non_windows
 
 
 logger = logging.getLogger(__name__)
-
-
-log_dir = Path('logs').absolute()
-
-
-def cli_factory(*args, **kwargs):
-    """Test function wrapper.
-    """
-    # Consistent log file naming for server output.
-    log_file = log_dir / f'{current_test_name()}-server.log'
-    kwargs['log_file'] = log_file
-    # Preserve normal signal handlers in callback function so it does not bleed
-    # into forked processes between multiple tests.
-    def wrapper(func):
-        def execute_with_preserved_signals():
-            with preserved_signals():
-                return func()
-        return _cli_factory(*args, **kwargs)(execute_with_preserved_signals)
-
-    return wrapper
 
 
 def test_function_is_run_using_server():
@@ -277,6 +227,10 @@ def test_client_receiving_signals_forwards_to_runner():
     # And the client receives a basic signal (i.e. any except SIGSTOP, SIGKILL,
     #  SIGT*)
     # Then the same signal should be sent to the subprocess running the command
+
+    # Ensure that the test runner caller doesn't impact signal handling.
+    signal.pthread_sigmask(signal.SIG_SETMASK, [])
+
     pid = os.getpid()
 
     def to_string(signals):
@@ -299,11 +253,18 @@ def test_client_receiving_signals_forwards_to_runner():
             for sig in test_signals:
                 os.kill(pid, sig)
 
+            received_signal = False
             received_signals = signal.sigpending()
             while received_signals != test_signals:
                 result = signal.sigtimedwait(forwarded_signals, 0.1)
                 if result is not None:
+                    received_signal = True
                     received_signals.add(result.si_signo)
+                elif received_signal:
+                    # Only trace after the first empty response.
+                    received_signal = False
+                    logger.debug(
+                        'Waiting for %s', test_signals - received_signals)
 
             output_path.write_text(
                 to_string(received_signals), encoding='utf-8')
@@ -325,6 +286,9 @@ def test_client_receiving_tstp_ttin_stops_itself():
     # When the client receives signal.SIGTSTP or signal.SIGTTIN
     # Then the same signal should be sent to the subprocess running the command
     # And the client should be stopped
+
+    # Ensure that the test runner caller doesn't impact signal handling.
+    signal.pthread_sigmask(signal.SIG_SETMASK, [])
 
     test_signals = [signal.SIGTSTP, signal.SIGTTIN]
 
@@ -874,135 +838,3 @@ def test_command_does_not_hang_on_first_invocation():
                 encoding='utf-8').strip().split()
             assert parent_pid_2 != main_pid
             assert parent_pid_1 == parent_pid_2
-
-
-def test_exit_code_propagated_from_function():
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            return 2
-        return inner
-
-    with contained_children():
-        assert runner() == 2
-
-
-def test_exit_code_propagated_on_sys_exit():
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            sys.exit(3)
-        return inner
-
-    with contained_children():
-        assert runner() == 3
-
-
-def test_exit_code_propagated_on_sys_exit_0():
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            sys.exit(0)
-        return inner
-
-    with contained_children():
-        assert runner() == 0
-
-
-def test_exit_code_propagated_on_sys_exit_none():
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            sys.exit()
-        return inner
-
-    with contained_children():
-        assert runner() == 0
-
-
-def test_exit_code_propagated_on_os__exit():
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            os._exit(4)
-        return inner
-
-    with contained_children():
-        assert runner() == 4
-
-
-def test_exit_code_propagated_on_exception():
-    message = 'expected_exception'
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            raise RuntimeError(message)
-        return inner
-
-    with contained_children():
-        with captured_std_streams() as (_stdin, _stdout, stderr):
-            assert runner() == 1
-
-        assert message in stderr.read()
-
-
-def test_exit_code_propagated_on_atexit_sys_exit():
-    # sys.exit has no effect when invoked from an atexit handler.
-    # Note that this is not really the *expected* behavior based on the
-    # documentation, see issue https://bugs.python.org/issue27035 for proposed
-    # changes.
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            def func():
-                sys.exit(5)
-            atexit.register(func)
-        return inner
-
-    with contained_children():
-        assert runner() == 0
-
-
-@pytest.mark.xfail(reason='multiprocessing does not support atexit handlers')
-def test_exit_code_propagated_on_atexit_exception():
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            def func():
-                raise RuntimeError('expected')
-            atexit.register(func)
-        return inner
-
-    with contained_children():
-        assert runner() == 1
-
-
-@pytest.mark.xfail(reason='multiprocessing does not support atexit handlers')
-def test_exit_code_propagated_on_atexit_os__exit():
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            def func():
-                os._exit(3)
-            atexit.register(func)
-        return inner
-
-    with contained_children():
-        assert runner() == 3
-
-
-def test_exit_code_propagated_when_server_gets_sigterm():
-    # Given the server is running
-    # And is processing a request
-    # When the server receives sigterm
-    # Then it will finish processing the request
-    # And send the correct exit code
-    @cli_factory(current_test_name())
-    def runner():
-        def inner():
-            os.kill(os.getppid(), signal.SIGTERM)
-            sys.exit(5)
-        return inner
-
-    with contained_children():
-        assert runner() == 5

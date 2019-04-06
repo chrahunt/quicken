@@ -4,13 +4,18 @@ trigger:
 jobs:
 
 - job: Pipeline
-  pool:
-    vmImage: 'Ubuntu-16.04'
   strategy:
     matrix:
-      Python37:
+      linux:
         python.version: '3.7'
+        imageName: 'ubuntu-16.04'
+      windows:
+        python.version: '3.7'
+        imageName: 'vs2017-win2016'
     maxParallel: 4
+
+  pool:
+    vmImage: $(imageName)
 
   steps:
   - task: UsePythonVersion@0

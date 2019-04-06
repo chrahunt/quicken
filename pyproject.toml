@@ -26,7 +26,7 @@ sphinx_autodoc_typehints = "^1.5"
 wrapt = "^1.10"
 pydevd = "^1.4"
 pytest-asyncio = "^0.9.0"
-tid = "^0.2.0"
+tid = { version = "^0.2.0", platform = "linux" }
 watchdog = "^0.9.0"
 pytest-mock = "^1.10"
 sphinxcontrib-trio = "^1.0"

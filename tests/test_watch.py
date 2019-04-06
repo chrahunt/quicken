@@ -5,8 +5,12 @@ import time
 
 from quicken._xdg import RuntimeDir
 
-from .watch import wait_for_create, wait_for_delete
 from .utils import isolated_filesystem
+from .utils.pytest import non_windows
+from .watch import wait_for_create, wait_for_delete
+
+
+pytestmark = non_windows
 
 
 def test_wait_for_create_notices_existing_file():

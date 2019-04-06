@@ -1,10 +1,15 @@
 """Signal helpers.
 """
-from contextlib import contextmanager
 import errno
+import logging
 import os
 import signal
+
+from contextlib import contextmanager
 from typing import Set
+
+
+logger = logging.getLogger(__name__)
 
 
 def _settable_signal(sig) -> bool:
@@ -40,6 +45,10 @@ def blocked_signals(signals: Set[signal.Signals]):
         signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 
 
+def pthread_getsigmask():
+    return signal.pthread_sigmask(signal.SIG_BLOCK, [])
+
+
 class SignalProxy:
     """Implements behavior for proxying signals to another process:
 
@@ -55,6 +64,7 @@ class SignalProxy:
             signal.signal(sig, self._handle_signal)
 
     def _handle_signal(self, num, _frame):
+        # Be sure all functions called in this method are re-entrant.
         os.kill(self._pid, num)
         # The SIGT* functions are handled differently, stopping the current
         # process and the handler process if received.

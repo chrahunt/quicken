@@ -1,12 +1,17 @@
 import os
-from pathlib import Path
 import tempfile
+
+from pathlib import Path
 
 from quicken._xdg import RuntimeDir
 
 import pytest
 
 from .utils import env
+from .utils.pytest import non_windows
+
+
+pytestmark = non_windows
 
 
 def test_runtime_dir_uses_xdg_env_var():

@@ -1,7 +1,13 @@
-from datetime import datetime
 import multiprocessing as mp
 
+from datetime import datetime
+
 import pytest
+
+from .utils.pytest import non_windows
+
+
+pytestmark = non_windows
 
 
 @pytest.fixture

@@ -3,6 +3,11 @@ import logging
 
 from quicken._protocol import ProcessState
 
+from .utils.pytest import non_windows
+
+
+pytestmark = non_windows
+
 
 def test_logging_stream_override_works():
     logger = logging.getLogger(__name__)
