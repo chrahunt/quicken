@@ -6,7 +6,8 @@ import sys
 import pytest
 
 from . import cli_factory
-from ..utils import captured_std_streams, contained_children
+from ..utils import captured_std_streams
+from ..utils.process import contained_children
 from ..utils.pytest import current_test_name
 
 

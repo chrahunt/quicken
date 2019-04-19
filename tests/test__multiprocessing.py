@@ -8,7 +8,8 @@ import pytest
 
 from quicken._multiprocessing import run_in_process
 
-from .utils import contained_children, isolated_filesystem
+from .utils import isolated_filesystem
+from .utils.process import contained_children
 from .utils.pytest import non_windows
 
 

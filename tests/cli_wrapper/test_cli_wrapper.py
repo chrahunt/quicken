@@ -21,8 +21,8 @@ from quicken._xdg import RuntimeDir
 
 from . import cli_factory
 from ..utils import (
-    argv, captured_std_streams, contained_children, env,
-    isolated_filesystem, kill_children, umask)
+    argv, captured_std_streams, env, isolated_filesystem, umask)
+from ..utils.process import contained_children, kill_children
 from ..utils.pytest import current_test_name, non_windows
 from ..watch import wait_for_create
 
@@ -384,12 +384,14 @@ def test_killed_client_causes_handler_to_exit():
             os.fsync(fd)
             os.close(fd)
             os.rename(path, runner_pid_file)
+            logger.debug('Inner function waiting')
             while True:
                 signal.pause()
 
         return inner
 
     def client():
+        logger.debug('Client starting')
         signal.pthread_sigmask(signal.SIG_BLOCK, forwarded_signals)
         sys.exit(runner())
 
@@ -398,7 +400,9 @@ def test_killed_client_causes_handler_to_exit():
             runner_pid_file = Path('runner_pid').absolute()
             runtime_dir = RuntimeDir(dir_path=str(path))
             p = Process(target=client)
+            logger.debug('Starting process')
             p.start()
+            logger.debug('Waiting for pid file')
             assert wait_for_create(
                 runtime_dir.path(runner_pid_file.name), timeout=2), \
                 f'{runner_pid_file} must have been created'
@@ -407,8 +411,11 @@ def test_killed_client_causes_handler_to_exit():
             client_process = psutil.Process(pid=p.pid)
             runner_process = psutil.Process(pid=runner_pid)
 
+            logger.debug('Killing client')
             client_process.kill()
+            logger.debug('Waiting for client')
             p.join()
+            logger.debug('Waiting for runner')
             runner_process.wait()
 
 
