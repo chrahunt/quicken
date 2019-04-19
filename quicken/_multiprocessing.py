@@ -1,16 +1,26 @@
 """Transferring files over connections.
 """
+from __future__ import annotations
+
 import asyncio
-from contextlib import contextmanager
-from io import TextIOWrapper
 import logging
 import multiprocessing
-from multiprocessing.connection import wait
-from multiprocessing.reduction import DupFd, register
 import os
 import socket
 import sys
+
+from contextlib import contextmanager
+from io import TextIOWrapper
+from multiprocessing.connection import wait
+from multiprocessing.reduction import register
 from typing import Any, TextIO
+
+
+try:
+    from multiprocessing.reduction import DupFd
+except ImportError:
+    # Can happen on Windows
+    DupFd = None
 
 
 logger = logging.getLogger(__name__)
