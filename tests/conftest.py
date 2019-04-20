@@ -4,26 +4,32 @@ import os
 import signal
 import sys
 import time
+import threading
+import traceback
 
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Timer
 
+import py
 import pytest
+
+from _pytest.reports import TestReport
+from more_itertools import one
 
 try:
     from tid import gettid
 except ImportError:
-    import threading
-
     def gettid():
         return threading.get_ident()
-
 
 from .utils.pytest import current_test_name
 
 
 log_file_format = 'logs/{test_case}.log'
+
+
+PYTEST_TIMEOUT_START = 'pytest_timeout_start'
 
 
 def pytest_runtest_setup(item):
@@ -93,12 +99,43 @@ def blocked_signals():
 
 
 def timeout_timer(item, timeout, callback):
-    sys.stderr.write('Test timed out\n')
-    sys.stderr.flush()
     if callback:
         callback()
-    # TODO: Copy backtrace capability from pytest_timeout.py.
-    os._exit(1)
+
+    config = item.config
+    reporter = item.config.pluginmanager.getplugin('terminalreporter')
+    hook = item.ihook
+
+    start_time = one(
+        p[1] for p in item.user_properties if p[0] == PYTEST_TIMEOUT_START)
+    now = time.time()
+    longrepr = '\nTIMEOUT\n\n' + dump_stacks()
+    report = TestReport(
+        nodeid=item.nodeid,
+        location=item.location,
+        keywords={x: 1 for x in item.keywords},
+        outcome='failed',
+        longrepr=longrepr,
+        when='call',
+        sections=[],
+        duration=now - start_time,
+        user_properties=item.user_properties,
+    )
+
+    hook.pytest_runtest_logreport(report=report)
+
+    try:
+        # XXX: Might race with the main thread here, but no real way to block it.
+        config.hook.pytest_terminal_summary(
+            terminalreporter=reporter, exitstatus=1, config=config)
+        reporter.write_sep("-", "TIMEOUT")
+        reporter.summary_stats()
+    except Exception:
+        traceback.print_exc()
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
 
 
 # Stand-in for pytest-timeout due to
@@ -117,11 +154,32 @@ def pytest_runtest_call(item):
         t = Timer(timeout, timeout_timer, [item, timeout, callback])
         t.start()
 
+    # Start time for reporting if needed.
+    item.user_properties.append((PYTEST_TIMEOUT_START, time.time()))
+
     try:
         yield
     finally:
         t.cancel()
         t.join()
+
+
+def dump_stacks():
+    """Dump the stacks of all threads except the current thread"""
+    current_ident = threading.current_thread().ident
+    text = ''
+    for thread_ident, frame in sys._current_frames().items():
+        if thread_ident == current_ident:
+            continue
+        for t in threading.enumerate():
+            if t.ident == thread_ident:
+                thread_name = t.name
+                break
+        else:
+            thread_name = '<unknown>'
+        text += write_title('Stack of %s (%s)' % (thread_name, thread_ident)) + '\n'
+        text += ''.join(traceback.format_stack(frame))
+    return text
 
 
 def pytest_collection_modifyitems(config, items):
@@ -130,3 +188,18 @@ def pytest_collection_modifyitems(config, items):
     # TODO: Use log_file as log_file_format
     # config.config.log_file
     print('pytest_collection_modifyitems()')
+
+
+def write_title(title, sep='-'):
+    """Write a section title
+
+    If *stream* is None sys.stderr will be used, *sep* is used to
+    draw the line.
+    """
+    width = py.io.get_terminal_width()
+    fill = int((width - len(title) - 2) / 2)
+    line = ' '.join([sep * fill, title, sep * fill])
+    if len(line) < width:
+        line += sep * (width - len(line))
+    return line
+

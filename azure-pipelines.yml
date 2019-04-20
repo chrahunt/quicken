@@ -28,7 +28,7 @@ jobs:
       poetry install
     displayName: 'Install dependencies'
 
-  - script: 'poetry run pytest -s --junitxml=junit/test-results.xml tests'
+  - script: 'poetry run pytest -s -ra --junitxml=junit/test-results.xml tests'
     displayName: Run tests
 
   - task: PublishTestResults@2
