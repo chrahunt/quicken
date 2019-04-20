@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import ContextManager, List
 
+from quicken._signal import settable_signals
+
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +88,7 @@ def umask(umask: int) -> ContextManager:
 
 @contextmanager
 def preserved_signals() -> ContextManager:
-    handlers = [(s, signal.getsignal(s)) for s in range(1, signal.NSIG)]
+    handlers = [(s, signal.getsignal(s)) for s in settable_signals]
     try:
         yield
     finally:

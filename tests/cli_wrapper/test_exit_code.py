@@ -8,7 +8,10 @@ import pytest
 from . import cli_factory
 from ..utils import captured_std_streams
 from ..utils.process import contained_children
-from ..utils.pytest import current_test_name
+from ..utils.pytest import current_test_name, non_windows
+
+
+pytestmark = non_windows
 
 
 def test_exit_code_propagated_from_function():

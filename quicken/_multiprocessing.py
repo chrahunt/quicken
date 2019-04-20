@@ -154,6 +154,10 @@ class AsyncConnectionAdapter:
 
     Not thread-safe.
     """
+
+    connection: multiprocessing.connection.Connection
+    """The underlying connection object."""
+
     def __init__(self, conn: multiprocessing.connection.Connection, loop=None):
         if not loop:
             loop = asyncio.get_running_loop()
@@ -235,6 +239,8 @@ class AsyncConnectionAdapter:
 
 @contextmanager
 def intercepted_sockets():
+    """Capture any socket objects created in an associated with statement.
+    """
     sockets = []
     _socket_new = socket.socket.__new__
 

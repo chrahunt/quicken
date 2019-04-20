@@ -1,5 +1,5 @@
 """
-Test that we don't break on Windows.
+Test that we don't break on Windows under import/normal use.
 """
 import os
 
@@ -11,7 +11,9 @@ from ..utils.pytest import current_test_name, windows_only
 pytestmark = windows_only
 
 
-def test_function_is_run_using_server():
+def test_function_is_not_run_using_server():
+    # Same test as test_cli_wrapper.py:test_function_is_run_using_server,
+    # but checking that it runs in-process.
     # Given a function decorated with cli_factory
     # And the server is not up
     # When the decorated function is executed
