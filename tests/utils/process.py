@@ -1,7 +1,7 @@
 import sys
 
 
-__all__ = ['contained_children', 'kill_children']
+__all__ = ['active_children', 'contained_children', 'kill_children']
 
 
 if not sys.platform.startswith('win'):

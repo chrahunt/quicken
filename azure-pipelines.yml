@@ -28,6 +28,8 @@ jobs:
       keyfile: 'poetry.lock'
       targetfolder: '.venv'
       vstsFeed: '$(CacheArtifactFeedId)'
+    # Don't want to avoid caching just because tests failed.
+    condition: succeededOrFailed()
     displayName: 'PyPI Cache'
 
   - script: |

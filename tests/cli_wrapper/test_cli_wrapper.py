@@ -22,7 +22,7 @@ from quicken._xdg import RuntimeDir
 from . import cli_factory
 from ..utils import (
     argv, captured_std_streams, env, isolated_filesystem, umask)
-from ..utils.process import contained_children, kill_children
+from ..utils.process import contained_children
 from ..utils.pytest import current_test_name, non_windows
 from ..watch import wait_for_create
 
@@ -72,7 +72,7 @@ def test_function_is_run_using_server():
 
 # This may time out if not all references to the std streams are closed in
 # the server.
-@pytest.mark.timeout(5, callback=kill_children)
+@pytest.mark.timeout(5)
 def test_runner_inherits_std_streams():
     # Given the server is not up
     # And the standard streams have been overridden
@@ -221,7 +221,7 @@ def test_runner_inherits_umask():
             assert stat.S_IMODE(result.st_mode) == user_rwx
 
 
-@pytest.mark.timeout(5, callback=kill_children)
+@pytest.mark.timeout(5)
 def test_client_receiving_signals_forwards_to_runner():
     # Given the server is processing a command in a subprocess.
     # And the client receives a basic signal (i.e. any except SIGSTOP, SIGKILL,
@@ -280,7 +280,7 @@ def test_client_receiving_signals_forwards_to_runner():
             assert traced_signals == to_string(test_signals)
 
 
-@pytest.mark.timeout(5, callback=kill_children)
+@pytest.mark.timeout(5)
 def test_client_receiving_tstp_ttin_stops_itself():
     # Given the server is processing a command in a subprocess
     # When the client receives signal.SIGTSTP or signal.SIGTTIN
@@ -366,7 +366,7 @@ def test_client_receiving_tstp_ttin_stops_itself():
             assert p.exitcode == 0
 
 
-@pytest.mark.timeout(5, callback=kill_children)
+@pytest.mark.timeout(5)
 def test_killed_client_causes_handler_to_exit():
     # Given the server is processing a command in a subprocess.
     # And the client process is killed (receives SIGKILL and exits)
@@ -390,6 +390,7 @@ def test_killed_client_causes_handler_to_exit():
 
         return inner
 
+    # Client runs in child process so we don't kill the test process itself.
     def client():
         logger.debug('Client starting')
         signal.pthread_sigmask(signal.SIG_BLOCK, forwarded_signals)
@@ -402,11 +403,13 @@ def test_killed_client_causes_handler_to_exit():
             p = Process(target=client)
             logger.debug('Starting process')
             p.start()
+
             logger.debug('Waiting for pid file')
             assert wait_for_create(
                 runtime_dir.path(runner_pid_file.name), timeout=2), \
                 f'{runner_pid_file} must have been created'
             runner_pid = int(runner_pid_file.read_text(encoding='utf-8'))
+            logger.debug('Runner started with pid: %d', runner_pid)
 
             client_process = psutil.Process(pid=p.pid)
             runner_process = psutil.Process(pid=runner_pid)

@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import time
+import threading
 
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,7 +18,7 @@ from fasteners import InterProcessLock
 logger = logging.getLogger(__name__)
 
 
-__all__ = ['contained_children', 'kill_children']
+__all__ = ['active_children', 'contained_children', 'kill_children']
 
 
 class ChildManager:
@@ -34,6 +35,7 @@ class ChildManager:
         # Use separate dedicated lock file to avoid issues opening/closing.
         lock_file = f'{tempdir}/lock'
         self._lock = InterProcessLock(lock_file)
+        self._tlock = threading.RLock()
         self._children: List[psutil.Process] = []
         self._num_children = 0
         os.register_at_fork(
@@ -56,17 +58,18 @@ class ChildManager:
     def _mutex(self):
         """IPC lock on pidlist and save/load _children member.
         """
-        with self._lock:
-            contents = Path(self._pidlist).read_text(encoding='utf-8')
-            if contents:
-                self._children = self._deserialize_children(contents)
-            try:
-                yield
-            finally:
-                with open(self._pidlist, 'w', encoding='utf-8') as f:
-                    f.write(self._serialize_children())
-                    f.flush()
-                    os.fsync(f.fileno())
+        with self._tlock:
+            with self._lock:
+                contents = Path(self._pidlist).read_text(encoding='utf-8')
+                if contents:
+                    self._children = self._deserialize_children(contents)
+                try:
+                    yield
+                finally:
+                    with open(self._pidlist, 'w', encoding='utf-8') as f:
+                        f.write(self._serialize_children())
+                        f.flush()
+                        os.fsync(f.fileno())
 
     def _serialize_children(self) -> str:
         out = []
@@ -116,6 +119,10 @@ class ChildManager:
 
 
 child_manager = ChildManager()
+
+
+def active_children():
+    return child_manager.active_children()
 
 
 @contextmanager
