@@ -13,3 +13,6 @@ class Client:
     def send(self, request: Request) -> Response:
         self._client.send(request)
         return self._client.recv()
+
+    def close(self) -> None:
+        self._client.close()

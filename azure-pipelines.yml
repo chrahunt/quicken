@@ -23,8 +23,17 @@ jobs:
       versionSpec: '$(python.version)'
       architecture: 'x64'
 
+  - task: 1ESLighthouseEng.PipelineArtifactCaching.RestoreAndSaveCacheV1.RestoreAndSaveCache@1
+    inputs:
+      keyfile: 'poetry.lock'
+      targetfolder: '.venv'
+      vstsFeed: '$(CacheArtifactFeedId)'
+    displayName: 'PyPI Cache'
+
   - script: |
       pip install poetry
+      poetry config settings.virtualenvs.in-project true
+      poetry config settings.virtualenvs.path .venv
       poetry install
     displayName: 'Install dependencies'
 
@@ -42,7 +51,7 @@ jobs:
     # publish as artifacts.
   - task: PublishPipelineArtifact@0
     inputs:
-      artifactName: test_logs
+      artifactName: 'test_logs_$(Agent.OS)'
       targetPath: logs/
     condition: succeededOrFailed()
     displayName: Publish logs
