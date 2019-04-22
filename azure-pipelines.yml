@@ -23,29 +23,46 @@ jobs:
       versionSpec: '$(python.version)'
       architecture: 'x64'
 
-  - task: 1ESLighthouseEng.PipelineArtifactCaching.RestoreAndSaveCacheV1.RestoreAndSaveCache@1
+  - task: 1ESLighthouseEng.PipelineArtifactCaching.RestoreCacheV1.RestoreCache@1
     inputs:
       keyfile: 'poetry.lock'
-      targetfolder: '.venv'
+      # two sources of delay in repeat builds: poetry install and dependency install
+      # we manage the .poetry venv and that's where poetry gets installed
+      # poetry manages .venv
+      # both are relative to the root because that's a current requirement of the
+      #  RestoreAndSaveCache plugin.
+      targetfolder: '.venv, .poetry'
       vstsFeed: '$(CacheArtifactFeedId)'
-    # Don't want to avoid caching just because tests failed.
-    condition: succeededOrFailed()
-    displayName: 'PyPI Cache'
+    displayName: 'PyPI Cache Restore'
 
   - script: |
-      pip install poetry
-      poetry config settings.virtualenvs.in-project true
-      poetry config settings.virtualenvs.path .venv
-      poetry install
-    displayName: 'Install dependencies'
+      python -m venv .poetry
+      .poetry/bin/python -m pip install --upgrade pip
+      .poetry/bin/python -m pip install --upgrade poetry
+      .poetry/bin/python -m poetry config settings.virtualenvs.in-project true
+      .poetry/bin/python -m poetry config settings.virtualenvs.path .venv
+    displayName: 'Poetry setup'
 
-  - script: 'poetry run pytest -s -ra --junitxml=junit/test-results.xml tests'
+  - script: |
+      .poetry/bin/python -m poetry install
+    displayName: 'Install/update dependencies'
+
+    # If dependency resolution succeeded, cache.
+  - task: 1ESLighthouseEng.PipelineArtifactCaching.SaveCacheV1.SaveCache@1
+    inputs:
+      keyfile: 'poetry.lock'
+      targetfolder: '.venv, .poetry'
+      vstsFeed: '$(CacheArtifactFeedId)'
+    displayName: 'PyPI Cache Save'
+
+  - script: |
+      .poetry/bin/python -m poetry run pytest -s -ra --junitxml=junit/test-results.xml tests
     displayName: Run tests
 
   - task: PublishTestResults@2
     inputs:
       testResultsFiles: '**/test-results.xml'
-      testRunTitle: 'Python $(python.version)'
+      testRunTitle: 'Python $(python.version) $(Agent.OS)'
     condition: succeededOrFailed()
     displayName: Publish test results
 
@@ -53,7 +70,7 @@ jobs:
     # publish as artifacts.
   - task: PublishPipelineArtifact@0
     inputs:
-      artifactName: 'test_logs_$(Agent.OS)'
+      artifactName: 'test_logs_$(python.version)_$(Agent.OS)'
       targetPath: logs/
     condition: succeededOrFailed()
     displayName: Publish logs
@@ -63,6 +80,6 @@ jobs:
   
   - task: PublishPipelineArtifact@0
     inputs:
-      artifactName: artifacts
+      artifactName: 'artifacts_$(python.version)_$(Agent.OS)'
       targetPath: dist/
     displayName: Publish artifacts
