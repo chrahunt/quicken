@@ -109,7 +109,6 @@ def pytest_timeout_timeout(item, report):
     # Get subprocess stacks.
     stacks = []
     children = active_children()
-    breakpoint()
     for child in children:
         text = f'stack for ({child.pid}): {child.cmdline()}\n'
         try:

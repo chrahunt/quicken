@@ -92,6 +92,15 @@ jobs:
       targetfolder: '$(app_venv), $(venv)'
       vstsFeed: '$(CacheArtifactFeedId)'
 
+  - script: |
+      sudo apt update
+      sudo apt install -y gdb
+      # Allow process tracing for same uid.
+      # TODO: prctl(PR_SET_PTRACER, <pid>)
+      echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+    displayName: Install debugging tools
+    condition: eq(variables['Agent.OS'], 'Linux')
+
   - task: PythonScript@0
     displayName: Run tests
     inputs:
@@ -114,8 +123,11 @@ jobs:
     condition: succeededOrFailed()
     displayName: Publish logs
 
-  - script: poetry build
+  - task: PythonScript@0
     displayName: Build
+    inputs:
+      scriptPath: .ap/scripts/python.py
+      arguments: -m poetry build
   
   - task: PublishPipelineArtifact@0
     inputs:
