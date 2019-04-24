@@ -33,7 +33,7 @@ from quicken._logging import UTCFormatter
 log_file_format = 'logs/{test_case}.log'
 
 
-pytest_plugins = "tests.timeout"
+pytest_plugins = "tests.timeout", "tests.strace"
 
 
 def pytest_runtest_setup(item):

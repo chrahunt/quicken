@@ -37,6 +37,12 @@ def pytest_addhooks(pluginmanager):
     pluginmanager.add_hookspecs(newhooks)
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        'markers', 'timeout(timeout)'
+    )
+
+
 def timeout_timer(item, timeout):
     config = item.config
     reporter = item.config.pluginmanager.getplugin('terminalreporter')

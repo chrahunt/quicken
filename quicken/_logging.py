@@ -39,5 +39,11 @@ class ContextLogger(logging.LoggerAdapter):
         super().__init__(logger, _ContextProvider(prefix))
 
 
+class NullContextFilter(logging.Filter):
+    def filter(self, record):
+        record.context = getattr(record, 'context', '')
+        return True
+
+
 class UTCFormatter(logging.Formatter):
     converter = time.gmtime

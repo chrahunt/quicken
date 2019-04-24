@@ -36,7 +36,7 @@ import psutil
 from .__version__ import __version__
 from ._asyncio import AsyncProcess, DeadlineTimer
 from ._constants import socket_name, server_state_name
-from ._logging import ContextLogger, UTCFormatter
+from ._logging import ContextLogger, NullContextFilter, UTCFormatter
 from ._multiprocessing import run_in_process, AsyncConnectionAdapter, \
     AsyncListener, ConnectionClose, ListenerStopped
 from ._typing import NoneFunction
@@ -506,6 +506,12 @@ def _configure_logging(logfile: Path, loglevel: str) -> None:
     logging.config.dictConfig({
         'version': 1,
         'disable_existing_loggers': False,
+        'filters': {
+            'context': {
+                '()': NullContextFilter,
+                'name': 'context',
+            }
+        },
         'formatters': {
             f'{__name__}-formatter': {
                 '()': UTCFormatter,
@@ -520,12 +526,13 @@ def _configure_logging(logfile: Path, loglevel: str) -> None:
         'handlers': {
             f'{__name__}-handler': {
                 '()': 'logging.handlers.RotatingFileHandler',
-                'level': loglevel,
-                'filename': str(logfile),
-                'encoding': 'utf-8',
-                'formatter': f'{__name__}-formatter',
-                'maxBytes': 5_000_000,
                 'backupCount': 1,
+                'encoding': 'utf-8',
+                'filename': str(logfile),
+                'filters': ['context'],
+                'formatter': f'{__name__}-formatter',
+                'level': loglevel,
+                'maxBytes': 5_000_000,
             }
         },
         'loggers': {
