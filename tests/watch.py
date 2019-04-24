@@ -73,6 +73,7 @@ def _wait_for(action: Action, timeout: float = 5) -> bool:
     signal.setitimer(signal.ITIMER_REAL, timeout)
 
     # Will be killed by timer or event handler.
+    logger.debug('Joining observer')
     observer.join()
     logger.debug('Observer returned')
 

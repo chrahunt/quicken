@@ -127,7 +127,9 @@ def daemonize(detach, target, daemon_options: Dict, log_file=None):
     detach_process_context()
 
     # Reset signal handlers.
-    for signum in settable_signals:
+    # We omit SIGPIPE so the default Python signal handler correctly translates
+    # it into an exception on socket write.
+    for signum in settable_signals - {signal.SIGPIPE}:
         signal.signal(signum, signal.SIG_DFL)
 
     # Reset signal disposition.
@@ -203,6 +205,7 @@ def _run_server(
     Path(server_state_name).write_text(
         json.dumps(server_state), encoding='utf-8')
 
+    logger.debug('Starting server')
     loop.create_task(server.serve())
 
     loop.run_forever()

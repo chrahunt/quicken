@@ -229,7 +229,11 @@ class AsyncConnectionAdapter:
     def _handle_writable(self):
         async def handle():
             msg = await self._write_queue.get()
-            self.connection.send(msg)
+            try:
+                self.connection.send(msg)
+            except BrokenPipeError:
+                self._handle_disconnect()
+
             if self._attached:
                 self._loop.add_writer(self._fd, self._handle_writable)
 

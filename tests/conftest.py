@@ -25,7 +25,7 @@ except ImportError:
 
 
 from .utils.pytest import current_test_name
-from .utils.process import active_children, kill_children
+from .utils.process import active_children, disable_child_tracking, kill_children
 
 from quicken._logging import UTCFormatter
 
@@ -108,6 +108,9 @@ def pytest_collection_modifyitems(config, items):
 def pytest_timeout_timeout(item, report):
     # Get subprocess stacks.
     stacks = []
+    # Prevent race conditions on fork since we spawn other processes to get
+    # stacks.
+    disable_child_tracking()
     children = active_children()
     for child in children:
         text = f'stack for ({child.pid}): {child.cmdline()}\n'

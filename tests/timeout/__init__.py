@@ -1,3 +1,4 @@
+import logging
 import os
 import signal
 import sys
@@ -13,6 +14,9 @@ import pytest
 
 from _pytest.reports import TestReport
 from more_itertools import one
+
+
+logger = logging.getLogger(__name__)
 
 
 PYTEST_TIMEOUT_START = 'pytest_timeout_start'
@@ -54,7 +58,12 @@ def timeout_timer(item, timeout):
         user_properties=item.user_properties,
     )
 
-    hook.pytest_timeout_timeout(item=item, report=report)
+    try:
+        hook.pytest_timeout_timeout(item=item, report=report)
+    except:
+        # Can't let user code interrupt our execution.
+        logger.exception('Error running pytest_timeout_timeout handlers')
+
     hook.pytest_runtest_logreport(report=report)
 
     try:

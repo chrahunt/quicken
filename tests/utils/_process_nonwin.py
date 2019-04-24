@@ -8,7 +8,7 @@ import threading
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import ContextManager, List
+from typing import ContextManager, List, Set
 
 import psutil
 
@@ -18,7 +18,81 @@ from fasteners import InterProcessLock
 logger = logging.getLogger(__name__)
 
 
-__all__ = ['active_children', 'contained_children', 'kill_children']
+__all__ = [
+    'active_children',
+    'contained_children',
+    'disable_child_tracking',
+    'kill_children'
+]
+
+
+class ChildManagerSharedState:
+    def __init__(self, base_path):
+        self._path = base_path
+        Path(self._path).touch()
+
+        lock_file = self._path + '.lock'
+        self._lock = InterProcessLock(lock_file)
+        self._tlock = threading.RLock()
+
+        self.children: List[psutil.Process] = []
+        self.keys: Set[str] = set()
+
+    @property
+    @contextmanager
+    def lock_guard(self):
+        with self._tlock:
+            with self._lock:
+                self.load()
+                try:
+                    yield
+                finally:
+                    self.save()
+
+    # File format is:
+    # {
+    #   # List of unacknowledged process keys.
+    #   "keys": ["ppid[idx]", ...],
+    #   # Actual process information as updated by last opening process.
+    #   "processes": [[pid, create_time], ...]
+    # }
+
+    def load(self):
+        contents = Path(self._path).read_text(encoding='utf-8')
+        if not contents:
+            return
+
+        try:
+            data = json.loads(contents)
+        except json.JSONDecodeError:
+            logger.warning('Bad JSON text: "%r"', contents)
+            raise
+
+        self.keys = set(data['keys'])
+
+        self.children = []
+        for pid, create_time in data['processes']:
+            try:
+                process = psutil.Process(pid=pid)
+            except psutil.NoSuchProcess:
+                pass
+            else:
+                if process.create_time() == create_time:
+                    self.children.append(process)
+
+    def save(self):
+        data = {
+            'keys': list(self.keys),
+            'processes': [
+                [child.pid, child.create_time()]
+                for child in self.children
+            ],
+        }
+
+        with open(self._path, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(data))
+            f.flush()
+            os.fsync(f.fileno())
 
 
 class ChildManager:
@@ -26,96 +100,99 @@ class ChildManager:
 
     We do this instead of recursively getting children with psutil because
     intermediate processes may have already exited.
+
+    Behavior is undefined if fork occurs:
+    - from multiple threads (unless manager is disabled)
+    - from within callbacks registered with register_at_fork
     """
-    def __init__(self):
+    def __init__(self, child_start_timeout: float = 5):
+        """
+        Args:
+            child_start_timeout: timeout (in seconds) to wait for the child process to
+              start. "Starting" in this case means the child handler runs.
+        """
         # XXX: this directory is leaked
         tempdir = tempfile.mkdtemp()
-        self._pidlist = f'{tempdir}/pids'
-        Path(self._pidlist).touch()
-        # Use separate dedicated lock file to avoid issues opening/closing.
-        lock_file = f'{tempdir}/lock'
-        self._lock = InterProcessLock(lock_file)
-        self._tlock = threading.RLock()
-        self._children: List[psutil.Process] = []
-        self._num_children = 0
+        self._state = ChildManagerSharedState(f'{tempdir}/pids')
+        self._tls = threading.local()
+        self._tls.disabled = False
+        self._child_start_timeout = child_start_timeout
+
+        self._re_init()
+
         os.register_at_fork(
-            before=self._before_in_parent,
             after_in_parent=self._after_in_parent,
             after_in_child=self._after_in_child)
 
     def children_pop_all(self):
-        with self._mutex:
-            l = self._children
-            self._children = []
+        with self._state.lock_guard:
+            l = self._state.children
+            self._state.children = []
         return l
 
     def active_children(self):
-        with self._mutex:
-            return list(self._children)
+        with self._state.lock_guard:
+            return self._state.children.copy()
 
     @property
-    @contextmanager
-    def _mutex(self):
-        """IPC lock on pidlist and save/load _children member.
+    def disabled(self) -> bool:
+        """Disable tracking child processes spawned from this thread.
         """
-        with self._tlock:
-            with self._lock:
-                contents = Path(self._pidlist).read_text(encoding='utf-8')
-                if contents:
-                    self._children = self._deserialize_children(contents)
-                try:
-                    yield
-                finally:
-                    with open(self._pidlist, 'w', encoding='utf-8') as f:
-                        f.write(self._serialize_children())
-                        f.flush()
-                        os.fsync(f.fileno())
+        return self._tls.disabled
 
-    def _serialize_children(self) -> str:
-        out = []
-        for child in self._children:
-            out.append([child.pid, child.create_time()])
-        return json.dumps(out)
+    @disabled.setter
+    def disabled(self, v: bool):
+        self._tls.disabled = v
 
-    def _deserialize_children(self, s) -> List[psutil.Process]:
-        try:
-            children = json.loads(s)
-        except json.JSONDecodeError:
-            logger.warning('Bad JSON text: "%r"', s)
-            raise
+    def _re_init(self):
+        """Initialization that happens in each process.
+        """
+        self._child_index = 0
 
-        out = []
-        for pid, create_time in children:
-            try:
-                process = psutil.Process(pid=pid)
-            except psutil.NoSuchProcess:
-                pass
-            else:
-                if process.create_time() == create_time:
-                    out.append(process)
-        return out
-
-    def _children_append(self, child):
-        with self._mutex:
-            self._children.append(child)
-
-    def _before_in_parent(self):
-        with self._mutex:
-            self._num_children = len(self._children)
-
-    def _after_in_parent(self):
-        # Busy wait for child to write pid.
-        while True:
-            with self._mutex:
-                num_children = len(self._children)
-                if num_children != self._num_children:
-                    # Child added itself.
-                    break
-            time.sleep(0.005)
+    def _make_key(self, pid, index):
+        return f'{pid}[{index}]'
 
     def _after_in_child(self):
-        with self._mutex:
-            self._children.append(psutil.Process(pid=os.getpid()))
+        with self._state.lock_guard:
+            ppid = os.getppid()
+            key = self._make_key(ppid, self._child_index)
+            self._state.keys.add(key)
+
+            pid = os.getpid()
+            process = psutil.Process(pid=pid)
+            self._state.children.append(process)
+
+        self._re_init()
+
+    def _after_in_parent(self):
+        if self.disabled:
+            return
+
+        # Best effort, try to wait for the child to have actually started and
+        # written pid, so that if an error occurs we will clean up the process.
+        key = self._make_key(os.getpid(), self._child_index)
+        start = time.time()
+        now = start
+        while now - start < self._child_start_timeout:
+            with self._state.lock_guard:
+                try:
+                    self._state.keys.remove(key)
+                except KeyError:
+                    pass
+                else:
+                    break
+
+            time.sleep(0.005)
+            now = time.time()
+        else:
+            logger.error(
+                'Child did not start in time (started: %d; now: %d)',
+                start,
+                now
+            )
+
+        # Unconditionally update index so next child doesn't conflict.
+        self._child_index += 1
 
 
 child_manager = ChildManager()
@@ -147,6 +224,10 @@ def contained_children(
         if assert_graceful and exc is None:
             assert not num_alive, \
                 f'Unexpected children still alive: {alive}'
+
+
+def disable_child_tracking():
+    child_manager.disabled = True
 
 
 def kill_children(timeout=1) -> List[psutil.Process]:
