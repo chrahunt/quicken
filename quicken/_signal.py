@@ -1,10 +1,16 @@
 """Signal helpers.
 """
-from contextlib import contextmanager
 import errno
+import logging
 import os
 import signal
+import sys
+
+from contextlib import contextmanager
 from typing import Set
+
+
+logger = logging.getLogger(__name__)
 
 
 def _settable_signal(sig) -> bool:
@@ -13,7 +19,12 @@ def _settable_signal(sig) -> bool:
     try:
         old = signal.signal(sig, lambda _num, _frame: ...)
     except OSError as e:
+        # POSIX response
         assert e.errno == errno.EINVAL
+        return False
+    except ValueError as e:
+        # Windows response
+        assert e.args[0] == 'invalid signal value'
         return False
     else:
         signal.signal(sig, old)
@@ -23,12 +34,16 @@ def _settable_signal(sig) -> bool:
 signal_range = set(range(1, signal.NSIG))
 # XXX: Can be signal.valid_signals() in 3.8+
 settable_signals = set(filter(_settable_signal, signal_range))
-forwarded_signals = settable_signals - {
-    # We skip SIGCHLD because it interferes with tests that use multiprocessing.
-    # We do not expect the client to receive the signal in any case anyway.
-    signal.SIGCHLD,
-    signal.SIGCLD,
-}
+
+if not sys.platform.startswith('win'):
+    forwarded_signals = settable_signals - {
+        # We skip SIGCHLD because it interferes with tests that use multiprocessing.
+        # We do not expect the client to receive the signal in any case anyway.
+        signal.SIGCHLD,
+        signal.SIGCLD,
+    }
+else:
+    forwarded_signals = settable_signals
 
 
 @contextmanager
@@ -38,6 +53,10 @@ def blocked_signals(signals: Set[signal.Signals]):
         yield
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+
+
+def pthread_getsigmask():
+    return signal.pthread_sigmask(signal.SIG_BLOCK, [])
 
 
 class SignalProxy:
@@ -55,6 +74,7 @@ class SignalProxy:
             signal.signal(sig, self._handle_signal)
 
     def _handle_signal(self, num, _frame):
+        # Be sure all functions called in this method are re-entrant.
         os.kill(self._pid, num)
         # The SIGT* functions are handled differently, stopping the current
         # process and the handler process if received.

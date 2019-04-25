@@ -1,16 +1,26 @@
 """Transferring files over connections.
 """
+from __future__ import annotations
+
 import asyncio
-from contextlib import contextmanager
-from io import TextIOWrapper
 import logging
 import multiprocessing
-from multiprocessing.connection import wait
-from multiprocessing.reduction import DupFd, register
 import os
 import socket
 import sys
+
+from contextlib import contextmanager
+from io import TextIOWrapper
+from multiprocessing.connection import wait
+from multiprocessing.reduction import register
 from typing import Any, TextIO
+
+
+try:
+    from multiprocessing.reduction import DupFd
+except ImportError:
+    # Can happen on Windows
+    DupFd = None
 
 
 logger = logging.getLogger(__name__)
@@ -144,6 +154,10 @@ class AsyncConnectionAdapter:
 
     Not thread-safe.
     """
+
+    connection: multiprocessing.connection.Connection
+    """The underlying connection object."""
+
     def __init__(self, conn: multiprocessing.connection.Connection, loop=None):
         if not loop:
             loop = asyncio.get_running_loop()
@@ -215,7 +229,11 @@ class AsyncConnectionAdapter:
     def _handle_writable(self):
         async def handle():
             msg = await self._write_queue.get()
-            self.connection.send(msg)
+            try:
+                self.connection.send(msg)
+            except BrokenPipeError:
+                self._handle_disconnect()
+
             if self._attached:
                 self._loop.add_writer(self._fd, self._handle_writable)
 
@@ -225,6 +243,8 @@ class AsyncConnectionAdapter:
 
 @contextmanager
 def intercepted_sockets():
+    """Capture any socket objects created in an associated with statement.
+    """
     sockets = []
     _socket_new = socket.socket.__new__
 

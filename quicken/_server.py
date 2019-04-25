@@ -14,7 +14,7 @@ implementation and do not
 from abc import ABC, abstractmethod
 import asyncio
 from contextlib import ExitStack
-import errno
+import contextvars
 import functools
 import json
 import logging
@@ -35,15 +35,17 @@ import psutil
 
 from .__version__ import __version__
 from ._asyncio import AsyncProcess, DeadlineTimer
+from ._constants import socket_name, server_state_name
+from ._logging import ContextLogger, NullContextFilter, UTCFormatter
 from ._multiprocessing import run_in_process, AsyncConnectionAdapter, \
     AsyncListener, ConnectionClose, ListenerStopped
 from ._typing import NoneFunction
-from ._constants import socket_name, server_state_name
 from ._protocol import ProcessState, Request, RequestTypes, Response, ServerState
+from ._signal import settable_signals
 from ._xdg import RuntimeDir
 
 
-logger = logging.getLogger(__name__)
+logger = ContextLogger(logging.getLogger(__name__), prefix='server_')
 
 
 RequestCallbackT = Callable[[socket.socket], None]
@@ -125,12 +127,10 @@ def daemonize(detach, target, daemon_options: Dict, log_file=None):
     detach_process_context()
 
     # Reset signal handlers.
-    for signum in range(1, signal.NSIG):
-        try:
-            signal.signal(signum, signal.SIG_DFL)
-        except OSError as e:
-            if e.errno != errno.EINVAL:
-                raise
+    # We omit SIGPIPE so the default Python signal handler correctly translates
+    # it into an exception on socket write.
+    for signum in settable_signals - {signal.SIGPIPE}:
+        signal.signal(signum, signal.SIG_DFL)
 
     # Reset signal disposition.
     signal.pthread_sigmask(signal.SIG_SETMASK, set())
@@ -144,7 +144,7 @@ def daemonize(detach, target, daemon_options: Dict, log_file=None):
 def _run_server(
         callback: RequestCallbackT,
         server_idle_timeout: Optional[float], done) -> None:
-    """Server server that provides sockets to `callback`.
+    """Server that provides sockets to `callback`.
 
     Method must be invoked when cwd is suitable for secure creation of files.
 
@@ -205,6 +205,7 @@ def _run_server(
     Path(server_state_name).write_text(
         json.dumps(server_state), encoding='utf-8')
 
+    logger.debug('Starting server')
     loop.create_task(server.serve())
 
     loop.run_forever()
@@ -219,6 +220,9 @@ class ConnectionHandler(ABC):
     @abstractmethod
     async def handle_shutdown(self):
         pass
+
+
+connection_id_var = contextvars.ContextVar('server_connection_id')
 
 
 class ProcessConnectionHandler(ConnectionHandler):
@@ -241,11 +245,34 @@ class ProcessConnectionHandler(ConnectionHandler):
 
     async def handle_connection(self, connection: AsyncConnectionAdapter):
         self._num_active_connections += 1
+        connection_id_var.set(connection.connection.fileno())
+        logger.debug('Handling connection')
+        try:
+            await self._handle_connection(connection)
+        except:
+            logger.exception('Unexpected exception handling connection')
+            raise
+        finally:
+            logger.debug('Done with connection')
+            self._num_active_connections -= 1
+            async with self._connection_finish_cv:
+                self._connection_finish_cv.notify_all()
+
+    async def _handle_connection(self, connection: AsyncConnectionAdapter):
         process: AsyncProcess = None
         process_task: asyncio.Task = None
         queue = asyncio.Queue()
+        # Have 2 asynchronous tasks running in a loop:
+        # - accept_request
+        # - handle_request
+        # accept_request waits on connection receive or error.
+        # on receipt, accept_request pushes to queue
+        # on error, accept_request
+        # handle_request always waits on the queue for requests and then handles
+        #  them as it is able
 
         async def handle_request():
+            """Wait for and handle a single request."""
             nonlocal process, process_task
             logger.debug('Waiting for request')
             request = await queue.get()
@@ -253,13 +280,17 @@ class ProcessConnectionHandler(ConnectionHandler):
                 state = ServerState(self._start_time, self._pid, self._context)
                 logger.debug('Sending server state')
                 await connection.send(Response(state))
+
             elif request.name == RequestTypes.run_process:
+                assert process is None, \
+                    'Process must not have been started'
                 process_state = request.contents
                 process = self._start_callback(process_state)
                 process_task = asyncio.create_task(process.wait())
                 pid = process.pid
                 logger.debug('Running process in handler: %d', pid)
                 await connection.send(Response(pid))
+
             elif request.name == RequestTypes.wait_process_done:
                 assert process is not None, \
                     'Process must have been started'
@@ -269,22 +300,22 @@ class ProcessConnectionHandler(ConnectionHandler):
                 exitcode = await asyncio.shield(process_task)
                 logger.debug('Result: %d', exitcode)
                 await connection.send(Response(exitcode))
+
             return True
 
         async def accept_request():
             try:
                 request: Request = await connection.recv()
             except ConnectionClose:
-                logger.debug(
-                    'Connection closed (%d)', connection.connection.fileno())
+                logger.debug('Connection closed')
             except ConnectionResetError:
-                logger.debug(
-                    'Connection reset (%d)', connection.connection.fileno())
+                logger.debug('Connection reset')
             else:
                 # We dispatch asynchronously so we can always notice connection
                 # reset quickly.
                 queue.put_nowait(request)
                 return True
+
             # This occurs when we have disconnected from the client so cancel
             # any pending responses and kill the child process.
             logger.debug('Killing child process')
@@ -294,6 +325,7 @@ class ProcessConnectionHandler(ConnectionHandler):
                 except ProcessLookupError:
                     # No problem, process already exited.
                     pass
+
             logger.debug('Cancelling request handler')
             request_handler.cancel()
 
@@ -318,12 +350,6 @@ class ProcessConnectionHandler(ConnectionHandler):
             logger.debug('Waiting for child process to exit')
             logger.debug('Process task: %s', process_task)
             await process_task
-
-        logger.debug(
-            'Done with connection (%d)', connection.connection.fileno())
-        self._num_active_connections -= 1
-        async with self._connection_finish_cv:
-            self._connection_finish_cv.notify()
 
     def _start_callback(self, process_state) -> AsyncProcess:
         def setup_child():
@@ -355,7 +381,7 @@ class ProcessConnectionHandler(ConnectionHandler):
 
 
 class Server:
-    """A multiprocessing.Connection server.Server accepts new connections and dispatches handling of requests to
+    """A multiprocessing.Connection server accepts new connections and dispatches handling of requests to
      the AsyncProcessExecutor.
 
     Per https://bugs.python.org/issue21998 asyncio is not fork-safe, so we spawn
@@ -402,8 +428,6 @@ class Server:
                         self._shutdown_accept_cv.notify()
                 return
 
-            logger.debug(
-                'Accepted connection (%d)', connection.connection.fileno())
             self._handle_connection(connection)
 
     async def stop(self):
@@ -440,6 +464,7 @@ class Server:
         async def wait_closed():
             await connection.closed()
             self._idle_handle_close()
+
         self._loop.create_task(wait_closed())
         self._loop.create_task(
             self._handler.handle_connection(connection))
@@ -476,20 +501,24 @@ class Server:
 
 
 def _configure_logging(logfile: Path, loglevel: str) -> None:
-    class UTCFormatter(logging.Formatter):
-        converter = time.gmtime
-
     logfile.parent.mkdir(parents=True, exist_ok=True)
     # TODO: Make fully configurable.
     logging.config.dictConfig({
         'version': 1,
         'disable_existing_loggers': False,
+        'filters': {
+            'context': {
+                '()': NullContextFilter,
+                'name': 'context',
+            }
+        },
         'formatters': {
             f'{__name__}-formatter': {
                 '()': UTCFormatter,
                 'format':
                     '#### [{asctime}][{levelname}][{name}]'
-                    '[{process} ({processName})][{thread} ({threadName})]\n'
+                    '[{process} ({processName})][{thread} ({threadName})]'
+                    '[{context}]\n'
                     '    {message}',
                 'style': '{',
             }
@@ -497,12 +526,13 @@ def _configure_logging(logfile: Path, loglevel: str) -> None:
         'handlers': {
             f'{__name__}-handler': {
                 '()': 'logging.handlers.RotatingFileHandler',
-                'level': loglevel,
-                'filename': str(logfile),
-                'encoding': 'utf-8',
-                'formatter': f'{__name__}-formatter',
-                'maxBytes': 5_000_000,
                 'backupCount': 1,
+                'encoding': 'utf-8',
+                'filename': str(logfile),
+                'filters': ['context'],
+                'formatter': f'{__name__}-formatter',
+                'level': loglevel,
+                'maxBytes': 5_000_000,
             }
         },
         'loggers': {

@@ -1,38 +1,58 @@
-from contextlib import contextmanager
 import logging
 import logging.config
 import os
-from pathlib import Path
-import pytest
-import signal
 import sys
-import time
-from threading import Timer
+import threading
 
-import tid
+from pathlib import Path
 
-from .utils import current_test_name
+import pytest
+
+try:
+    from tid import gettid
+except ImportError:
+    def gettid():
+        return threading.get_ident()
+
+try:
+    from ch.debug.gdb_get_trace import get_process_stack
+except ImportError:
+    if sys.platform.startswith('win'):
+        def get_process_stack(pid):
+            raise NotImplementedError('Not implemented on Windows')
+    else:
+        raise
+
+
+from .utils.pytest import current_test_name
+from .utils.process import active_children, disable_child_tracking, kill_children
+
+from quicken._logging import UTCFormatter
 
 
 log_file_format = 'logs/{test_case}.log'
+
+
+pytest_plugins = "tests.timeout", "tests.strace"
 
 
 def pytest_runtest_setup(item):
     path = Path(log_file_format.format(test_case=item.name)).absolute()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    class UTCFormatter(logging.Formatter):
-        converter = time.gmtime
-
     class TestNameAdderFilter(logging.Filter):
         def filter(self, record):
             record.test_name = current_test_name()
+            return True
+
+    class PidFilter(logging.Filter):
+        def filter(self, record):
             record.pid = os.getpid()
             return True
 
     class TidFilter(logging.Filter):
         def filter(self, record):
-            record.tid = tid.gettid()
+            record.tid = gettid()
             return True
 
     logging.config.dictConfig({
@@ -42,6 +62,10 @@ def pytest_runtest_setup(item):
             'test_name': {
                 '()': TestNameAdderFilter,
                 'name': 'test_name',
+            },
+            'pid': {
+                '()': PidFilter,
+                'name': 'pid',
             },
             'tid': {
                 '()': TidFilter,
@@ -60,59 +84,17 @@ def pytest_runtest_setup(item):
                 '()': 'logging.FileHandler',
                 'level': 'DEBUG',
                 'filename': str(path),
-                'filters': ['test_name', 'tid'],
+                'filters': ['test_name', 'tid', 'pid'],
                 'encoding': 'utf-8',
                 'formatter': 'default',
             }
         },
         'root': {
-            'filters': ['test_name', 'tid'],
+            'filters': ['test_name', 'tid', 'pid'],
             'handlers': ['file'],
             'level': 'DEBUG',
         }
     })
-
-
-@contextmanager
-def blocked_signals():
-    old_signals = signal.pthread_sigmask(
-        signal.SIG_SETMASK, range(1, signal.NSIG))
-    try:
-        yield
-    finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, old_signals)
-
-
-def timeout_timer(item, timeout, callback):
-    sys.stderr.write('Test timed out\n')
-    sys.stderr.flush()
-    if callback:
-        callback()
-    # TODO: Copy backtrace capability from pytest_timeout.py.
-    os._exit(1)
-
-
-# Stand-in for pytest-timeout due to
-# https://bitbucket.org/pytest-dev/pytest-timeout/issues/33/signals-should-be-blocked-in-thread-when
-# which breaks signal-related test cases.
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_call(item):
-    marker = item.get_closest_marker('timeout')
-    if not marker:
-        yield
-        return
-
-    timeout = marker.args[0]
-    callback = marker.kwargs.get('callback')
-    with blocked_signals():
-        t = Timer(timeout, timeout_timer, [item, timeout, callback])
-        t.start()
-
-    try:
-        yield
-    finally:
-        t.cancel()
-        t.join()
 
 
 def pytest_collection_modifyitems(config, items):
@@ -120,4 +102,26 @@ def pytest_collection_modifyitems(config, items):
     log_file_format = str(Path(log_file_format).absolute())
     # TODO: Use log_file as log_file_format
     # config.config.log_file
-    print('pytest_collection_modifyitems()')
+
+
+@pytest.hookimpl
+def pytest_timeout_timeout(item, report):
+    # Get subprocess stacks.
+    stacks = []
+    # Prevent race conditions on fork since we spawn other processes to get
+    # stacks.
+    disable_child_tracking()
+    children = active_children()
+    for child in children:
+        text = f'stack for ({child.pid}): {child.cmdline()}\n'
+        try:
+            text += get_process_stack(child.pid)
+        except Exception as e:
+            text += f'Error: {e}'
+
+        stacks.append(text)
+
+    if stacks:
+        report.longrepr = report.longrepr + '\nsubprocess stacks:\n' + '\n'.join(stacks)
+
+    kill_children()

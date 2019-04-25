@@ -1,7 +1,9 @@
-*.egg-info
+/*.egg-info/
+/dist/
+/htmlcov/
+/logs/
+/pip-wheel-metadata/
+
+__pycache__/
 .pytest_cache
-__pycache__
-dist/
-*.log
 .coverage
-htmlcov/

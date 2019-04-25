@@ -45,6 +45,30 @@ class DeadlineTimer:
             self.expires_from_now(self._time_remaining)
 
 
+class IdleTimer:
+    """Represents an operation that should be executed if other conditions
+    are not true.
+    """
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self._loop = loop
+
+    def start(self):
+        """Start the operation.
+        """
+
+    def bump(self):
+        """Reset the timer for a one-off operation.
+        """
+
+    def add_ongoing(self, n=1):
+        """Add an ongoing operation.
+        """
+
+    def remove_ongoing(self, n=1):
+        """Remove an ongoing operation.
+        """
+
+
 class AsyncProcess:
     """asyncio wrapper for multiprocessing.Process.
 

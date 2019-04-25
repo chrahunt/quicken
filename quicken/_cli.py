@@ -1,12 +1,14 @@
 """CLI wrapper interface for starting/using server process.
 """
-from functools import wraps
 import json
 import logging
 import multiprocessing
 import os
+import sys
+
+from functools import wraps
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Dict, Optional
 
 from fasteners import InterProcessLock
 
@@ -31,7 +33,7 @@ class QuickenError(Exception):
     pass
 
 
-def cli_factory(
+def _cli_factory(
         name: str,
         *,
         runtime_dir_path: Optional[str] = None,
@@ -106,9 +108,11 @@ def cli_factory(
                 except ConnectionRefusedError:
                     logger.warning(
                         'Failed to connect to server - executing cli directly.')
+
             if not client:
                 multiprocessing.current_process().authkey = os.urandom(32)
                 return factory_fn()()
+
             return _run_client(client)
 
         return run_cli
@@ -116,11 +120,31 @@ def cli_factory(
     return inner_cli_factory
 
 
+def _cli_factory_win(
+    *args,
+    **kwargs,
+):
+    def inner_cli_factory(factory_fn: CliFactoryT) -> NoneFunction:
+        @wraps(factory_fn)
+        def run_cli() -> Optional[int]:
+            return factory_fn()()
+
+        return run_cli
+
+    return inner_cli_factory
+
+
+if sys.platform.startswith('win'):
+    cli_factory = _cli_factory_win
+else:
+    cli_factory = _cli_factory
+
+
 class CliServerManager:
     """Responsible for starting (if applicable) and connecting to the server.
 
     Race conditions are prevented by acquiring an exclusive lock on
-    runtime_dir/admin during connection and start.
+    {runtime_dir}/admin during connection and start.
     """
     def __init__(
             self, factory_fn, runtime_dir: RuntimeDir, log_file,
@@ -156,6 +180,7 @@ class CliServerManager:
         Returns:
             Client connected to the server
         """
+        assert self._lock.acquired, 'Connect must be called under lock.'
         try:
             return self._get_client()
         except FileNotFoundError:
@@ -302,4 +327,5 @@ def _run_client(client: Client) -> int:
 
     logger.debug('Waiting for process to finish')
     response = client.send(Request(RequestTypes.wait_process_done, None))
+    client.close()
     return response.contents

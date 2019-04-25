@@ -1,35 +1,116 @@
 trigger:
 - master
 
+variables:
+  # Primary virtual environment used for poetry.
+  # Also made available to .ap/scripts/python.py to resolve to the correct
+  #  Python.
+  venv: .poetry
+  app_venv: .venv
+
 jobs:
 
 - job: Pipeline
-  pool:
-    vmImage: 'Ubuntu-16.04'
   strategy:
     matrix:
-      Python37:
+      linux:
         python.version: '3.7'
+        imageName: 'ubuntu-16.04'
+      windows:
+        python.version: '3.7'
+        imageName: 'vs2017-win2016'
     maxParallel: 4
 
+  pool:
+    vmImage: $(imageName)
+
   steps:
+    # Arbitrary cache key properties.
+  - bash: |
+      echo '
+      python_version=$(python.version)
+      os=$(Agent.OS)
+      ' > buildinfo.txt
+    displayName: 'Create CI properties file'
+
   - task: UsePythonVersion@0
     inputs:
       versionSpec: '$(python.version)'
       architecture: 'x64'
 
-  - script: |
-      pip install poetry
-      poetry install
-    displayName: 'Install dependencies'
+  - task: 1ESLighthouseEng.PipelineArtifactCaching.RestoreCacheV1.RestoreCache@1
+    displayName: 'PyPI Cache Restore'
+    inputs:
+      keyfile: 'poetry.lock, buildinfo.txt'
+      targetfolder: '$(app_venv), $(venv)'
+      vstsFeed: '$(CacheArtifactFeedId)'
 
-  - script: 'poetry run pytest -s --junitxml=junit/test-results.xml tests'
+    # venv is idempotent - no issues if cache has been restored
+  - script: python -m venv $(venv)
+    displayName: Make Poetry venv
+
+  - task: PythonScript@0
+    displayName: Setup Poetry 1
+    inputs:
+      scriptPath: .ap/scripts/python.py
+      arguments: -m pip install --upgrade pip
+
+  - task: PythonScript@0
+    displayName: Setup Poetry 2
+    inputs:
+      scriptPath: .ap/scripts/python.py
+      arguments: -m pip install --upgrade poetry
+
+  - task: PythonScript@0
+    displayName: Configure Poetry 1
+    inputs:
+      scriptPath: .ap/scripts/python.py
+      arguments: -m poetry config settings.virtualenvs.in-project true
+
+  - task: PythonScript@0
+    displayName: Configure Poetry 2
+    inputs:
+      scriptPath: .ap/scripts/python.py
+      arguments: -m poetry config settings.virtualenvs.path $(app_venv)
+
+    # Letting Python install the virtual environment works around an issue
+    # seen where ensurepip fails when poetry executes the installation.
+  - script: python -m venv $(app_venv)
+    displayName: Make app venv
+
+  - task: PythonScript@0
+    displayName: Install/update dependencies
+    inputs:
+      scriptPath: .ap/scripts/python.py
+      arguments: -m poetry install
+
+    # If dependency resolution succeeded, cache.
+  - task: 1ESLighthouseEng.PipelineArtifactCaching.SaveCacheV1.SaveCache@1
+    displayName: 'PyPI Cache Save'
+    inputs:
+      keyfile: 'poetry.lock, buildinfo.txt'
+      targetfolder: '$(app_venv), $(venv)'
+      vstsFeed: '$(CacheArtifactFeedId)'
+
+  - script: |
+      sudo apt update
+      sudo apt install -y gdb
+      # Allow process tracing for same uid.
+      # TODO: prctl(PR_SET_PTRACER, <pid>)
+      echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+    displayName: Install debugging tools
+    condition: eq(variables['Agent.OS'], 'Linux')
+
+  - task: PythonScript@0
     displayName: Run tests
+    inputs:
+      scriptPath: .ap/scripts/python.py
+      arguments: -m poetry run pytest -s -ra --junitxml=junit/test-results.xml tests
 
   - task: PublishTestResults@2
     inputs:
       testResultsFiles: '**/test-results.xml'
-      testRunTitle: 'Python $(python.version)'
+      testRunTitle: 'Python $(python.version) $(Agent.OS)'
     condition: succeededOrFailed()
     displayName: Publish test results
 
@@ -37,16 +118,19 @@ jobs:
     # publish as artifacts.
   - task: PublishPipelineArtifact@0
     inputs:
-      artifactName: test_logs
+      artifactName: 'test_logs_$(python.version)_$(Agent.OS)'
       targetPath: logs/
     condition: succeededOrFailed()
     displayName: Publish logs
 
-  - script: poetry build
+  - task: PythonScript@0
     displayName: Build
+    inputs:
+      scriptPath: .ap/scripts/python.py
+      arguments: -m poetry build
   
   - task: PublishPipelineArtifact@0
     inputs:
-      artifactName: artifacts
+      artifactName: 'artifacts_$(python.version)_$(Agent.OS)'
       targetPath: dist/
     displayName: Publish artifacts

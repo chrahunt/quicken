@@ -1,8 +1,8 @@
 from collections import namedtuple
 import logging
 import signal
+import sys
 
-import watchdog.observers.inotify_buffer
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -12,8 +12,10 @@ from quicken._xdg import BoundPath, chdir
 logger = logging.getLogger(__name__)
 
 
-# Fix for https://github.com/gorakhargosh/watchdog/issues/390
-watchdog.observers.inotify_buffer.InotifyBuffer.delay = 0
+if not sys.platform.startswith('win'):
+    import watchdog.observers.inotify_buffer
+    # Fix for https://github.com/gorakhargosh/watchdog/issues/390
+    watchdog.observers.inotify_buffer.InotifyBuffer.delay = 0
 
 
 Action = namedtuple('Action', 'path present')
@@ -71,6 +73,7 @@ def _wait_for(action: Action, timeout: float = 5) -> bool:
     signal.setitimer(signal.ITIMER_REAL, timeout)
 
     # Will be killed by timer or event handler.
+    logger.debug('Joining observer')
     observer.join()
     logger.debug('Observer returned')
 
