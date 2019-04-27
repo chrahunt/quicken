@@ -93,14 +93,7 @@ jobs:
       vstsFeed: '$(CacheArtifactFeedId)'
 
   - script: |
-      # https://github.com/iovisor/bcc/blob/master/INSTALL.md#ubuntu---binary
-      sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 4052245BD4284CDD
-      echo "deb https://repo.iovisor.org/apt/$(lsb_release -cs) $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/iovisor.list
       sudo apt update
-      sudo apt install -y \
-          bcc-tools \
-          libbcc-examples \
-          linux-headers-$(uname -r)
       sudo apt install -y gdb
       # Allow process tracing for same uid.
       # TODO: prctl(PR_SET_PTRACER, <pid>)

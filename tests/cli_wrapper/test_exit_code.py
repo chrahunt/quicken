@@ -84,7 +84,6 @@ def test_exit_code_propagated_on_exception():
         assert message in stderr.read()
 
 
-@pytest.mark.strace
 def test_exit_code_propagated_on_atexit_sys_exit():
     # sys.exit has no effect when invoked from an atexit handler.
     # Note that this is not really the *expected* behavior based on the
