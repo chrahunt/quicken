@@ -99,7 +99,6 @@ def test_runner_inherits_std_streams():
         assert stdout_output == stdout_text
 
 
-@pytest.mark.strace
 def test_runner_inherits_environment():
     # Given a command that depends on an environment variable TEST
     # And the server is up and has an inherited environment value TEST=1

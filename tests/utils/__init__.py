@@ -118,8 +118,10 @@ def captured_std_streams() -> ContextManager:
     stdin_old, stdout_old, stderr_old = \
         sys.stdin, sys.stdout, sys.stderr
 
-    sys.stdin, sys.stdout, sys.stderr = \
-        os.fdopen(stdin_r), os.fdopen(stdout_w, 'w'), os.fdopen(stderr_w, 'w')
+    # We close the files explicitly at the end of ths scope.
+    sys.stdin = os.fdopen(stdin_r, closefd=False)
+    sys.stdout = os.fdopen(stdout_w, 'w', closefd=False)
+    sys.stderr = os.fdopen(stderr_w, 'w', closefd=False)
     try:
         yield os.fdopen(stdin_w, 'w'), os.fdopen(stdout_r), os.fdopen(stderr_r)
     finally:
