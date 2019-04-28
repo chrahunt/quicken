@@ -1,11 +1,13 @@
 from __future__ import annotations
+
 import copy
-from dataclasses import dataclass
 import io
 import logging
 import os
-from pathlib import Path
 import sys
+
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List
 
 # Registers TextIOWrapper handler.
