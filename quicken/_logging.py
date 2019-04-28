@@ -1,7 +1,8 @@
-from collections.abc import Mapping
 import contextvars
 import logging
 import time
+
+from collections.abc import Mapping
 
 
 class _Context:

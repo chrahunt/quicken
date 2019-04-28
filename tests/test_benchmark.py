@@ -75,6 +75,16 @@ def test_quicken_import_time(benchmark):
     assert result == 0, 'Process must have exited cleanly'
 
 
+def test_quicken_server_import_time(benchmark):
+    # We import _server lazily, this shows us the portion of startup that goes
+    # towards that.
+    def target():
+        return run_code('import quicken._server; import quicken._cli')
+
+    result = benchmark(target)
+    assert result == 0, 'Process must have exited cleanly'
+
+
 # Enforce uniqueness of directory between test runs.
 test_id = uuid.uuid4()
 

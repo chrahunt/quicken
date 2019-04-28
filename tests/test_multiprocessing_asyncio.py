@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from quicken._asyncio import AsyncProcess
+from quicken._multiprocessing_asyncio import AsyncProcess
 
 from .utils import isolated_filesystem
 from .utils.pytest import non_windows
