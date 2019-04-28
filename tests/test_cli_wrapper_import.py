@@ -1,43 +1,106 @@
-import multiprocessing as mp
+import subprocess
+import sys
+import uuid
 
-from datetime import datetime
-
-import pytest
-
-from .utils.pytest import non_windows
+from .utils import env
+from .utils.pytest import current_test_name, non_windows
 
 
 pytestmark = non_windows
 
 
-@pytest.fixture
-def spawn_ctx():
-    return mp.get_context('spawn')
+test_program = '''
+import time
+import sys
+
+# Represents imports and module initialization.
+time.sleep(0.1)
+
+def cli():
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(cli())
+'''
 
 
-def noop():
-    pass
+test_quicken_program = '''
+import os
+import sys
+
+from quicken import cli_factory
+
+# Timeout with enough time to stay up for the server-reuse tests but go down
+# for the startup tests.
+@cli_factory(os.environ['TEST_SERVER_NAME'], server_idle_timeout=2)
+def wrapper():
+    import time
+    # Represents imports and module initialization.
+    time.sleep(0.1)
+    def cli():
+        return 0
+    return cli
+
+if __name__ == '__main__':
+    sys.exit(wrapper())
+'''
 
 
-def import_quicken():
-    from quicken import cli_factory
+def run_code(code):
+    args = [sys.executable, '-c', code]
+    return subprocess.run(args).returncode
 
 
-def test_python_spawn_time(spawn_ctx: mp):
-    p = spawn_ctx.Process(target=noop)
-    start = datetime.now()
-    p.start()
-    p.join()
-    end = datetime.now()
-    print(end - start)
+def test_python_spawn_time(benchmark):
+    def target():
+        return run_code('')
+
+    result = benchmark(target)
+    assert result == 0, 'Process must have exited cleanly'
 
 
-def test_cli_wrapper_import_time_is_not_high(spawn_ctx):
-    # Should be higher than python -c ''
-    # But not higher than python -c 'import quicken.
-    p = spawn_ctx.Process(target=import_quicken)
-    start = datetime.now()
-    p.start()
-    p.join()
-    end = datetime.now()
-    print(end - start)
+def test_python_program_time(benchmark):
+    def target():
+        return run_code(test_program)
+
+    result = benchmark(target)
+    assert result == 0, 'Process must have exited cleanly'
+
+
+def test_quicken_import_time(benchmark):
+    def target():
+        return run_code('from quicken import cli_factory')
+
+    result = benchmark(target)
+    assert result == 0, 'Process must have exited cleanly'
+
+
+# Enforce uniqueness of directory between test runs.
+test_id = uuid.uuid4()
+
+
+def test_quicken_start_first_time(benchmark):
+    # Use different server names to get server start time.
+    test_name = current_test_name()
+    i = 0
+    def target():
+        nonlocal i
+        i += 1
+        name = f'{test_name}-{test_id}-{i}'
+        with env(TEST_SERVER_NAME=name):
+            return run_code(test_quicken_program)
+
+    result = benchmark(target)
+    assert result == 0, 'Process must have exited cleanly'
+
+
+def test_quicken_start_after_first_time(benchmark):
+    test_name = current_test_name()
+    name = f'{test_name}-{test_id}'
+    def target():
+        with env(TEST_SERVER_NAME=name):
+            return run_code(test_quicken_program)
+
+    assert target() == 0, 'Initial setup must exit cleanly'
+    result = benchmark(target)
+    assert result == 0, 'Process must have exited cleanly'
