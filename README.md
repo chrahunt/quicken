@@ -2,33 +2,54 @@
 
 Make Python tools fast.
 
+Before:
+
 ```python
-# app/cli.py
+import sys
+
 import slow_module
 import has_lots_of_dependencies
 
 
-def cli():
-    print('hello world')
-    # Finally get to work after everything is loaded.
-    slow_module.do_work(has_lots_of_dependencies)
-    
-
-# app/main.py
-from quicken import cli_factory
-
-
-@cli_factory('app')
 def main():
-    from .cli import cli
-    return cli
+    print('hello world')
+    slow_module.do_work(has_lots_of_dependencies)
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+```
+
+After:
+
+```python
+import sys
+
+from quicken import quicken
+
+
+@quicken('app')
+def main_wrapper():
+    import slow_module
+    import has_lots_of_dependencies
+
+    def main():
+        print('hello world')
+        slow_module.do_work(has_lots_of_dependencies)
+
+    return main
+
+
+if __name__ == '__main__'
+    sys.exit(main_wrapper())
 ```
 
 That's it! The first time `main()` is invoked a server will be created and
 stay up even after the process finishes. When another process starts up it
-will request the server to execute `cli` instead of reloading all modules
-(and dependencies) from disk. This relies on the speed of `fork` being lower
-than the startup time of a typical cli application.
+will request the server to execute `main`.
+ 
+This speeds up command-line applications with startup bottlenecks related to
+module loading and initialization.
 
 If `python -c ''` takes 10ms, this module takes around 40ms. That's how
 fast your command-line apps can start every time after the server is up.
@@ -52,7 +73,6 @@ CLI tool should be able to get to work in less than 100ms.
 
 * Unix only.
 * Debugging may be less obvious for end users or contributors.
-* Daemon will not automatically have updated gid list if user was modified.
 * Access to the socket file implies access to the daemon (and the associated command that it would run if asked).
 
 # Tips

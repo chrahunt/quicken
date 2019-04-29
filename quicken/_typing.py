@@ -1,5 +1,5 @@
-from typing import Callable, Union
+from typing import Callable, List, Mapping, Union
 
 
 NoneFunction = Callable[[], None]
-JSONValue = Union[str, int, float, bool, None]
+JSONType = Union[str, int, float, bool, None, Mapping[str, 'JSONType'], List['JSONType']]

@@ -31,7 +31,7 @@ from typing import Any, Dict, Optional
 
 import psutil
 
-from .__version__ import __version__
+from . import __version__
 from ._asyncio import DeadlineTimer
 from ._constants import socket_name, server_state_name
 from ._logging import ContextLogger, NullContextFilter, UTCFormatter

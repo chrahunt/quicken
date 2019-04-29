@@ -35,7 +35,7 @@ def test_something():
 """
 from pathlib import Path
 
-from quicken import cli_factory as _cli_factory
+from quicken import quicken
 
 from ..utils.pytest import current_test_name
 from ..utils import preserved_signals
@@ -56,6 +56,6 @@ def cli_factory(*args, **kwargs):
         def execute_with_preserved_signals():
             with preserved_signals():
                 return func()
-        return _cli_factory(*args, **kwargs)(execute_with_preserved_signals)
+        return quicken(*args, **kwargs)(execute_with_preserved_signals)
 
     return wrapper

@@ -587,10 +587,12 @@ def test_user_data_invalid_raises_exception():
     class BadData:
         pass
 
+    @cli_factory(current_test_name(), user_data=BadData())
+    def runner():
+        ...
+
     with pytest.raises(QuickenError) as e:
-        @cli_factory(current_test_name(), user_data=BadData())
-        def runner():
-            ...
+        runner()
 
     assert 'user_data' in str(e)
 
