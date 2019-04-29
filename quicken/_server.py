@@ -193,6 +193,8 @@ def _run_server(
         'version': __version__,
         'pid': pid,
         'user_data': user_data,
+        'groups': os.getgroups(),
+        'gid': os.getgid(),
     }
     Path(server_state_name).write_text(
         json.dumps(server_state), encoding='utf-8')
