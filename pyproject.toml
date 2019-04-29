@@ -10,7 +10,6 @@ repository = "https://github.com/chrahunt/quicken"
 
 [tool.poetry.dependencies]
 python = "^3.7"
-python-daemon = "^2.2"
 pid = "^2.2"
 psutil = "^5.4"
 tblib = "^1.3"
