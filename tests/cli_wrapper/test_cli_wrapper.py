@@ -10,7 +10,7 @@ import time
 
 from multiprocessing import active_children, Process, Pipe
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import psutil
 import pytest
@@ -926,3 +926,128 @@ def test_command_does_not_hang_on_first_invocation():
                 encoding='utf-8').strip().split()
             assert parent_pid_2 != main_pid
             assert parent_pid_1 == parent_pid_2
+
+
+def test_runner_rejects_on_different_uids():
+    # Given a user is executing the decorated function
+    # And their real, effective, or saved uid or gid are different
+    # Then the function should raise a QuickenError with the reason
+    # Unless the server is bypassed
+    def bypass_handler():
+        return bypass
+
+    bypass = False
+
+    @cli_factory(current_test_name(), bypass_server=bypass_handler)
+    def runner():
+        def inner():
+            return 0
+
+        return inner
+
+    cases = [
+        [(3, 3, 2), ['real', 'effective']],
+        [(3, 2, 3), ['real', 'saved']],
+        [(2, 3, 3), ['effective', 'saved']],
+        [(2, 3, 4), ['real', 'effective', 'saved']],
+    ]
+
+    with contained_children():
+        for case in cases:
+            id_result, expected_strings = case
+            def patched():
+                return id_result
+
+            with patch('os.getresuid', patched):
+                with pytest.raises(QuickenError) as e:
+                    runner()
+
+                for s in expected_strings:
+                    assert s in str(e)
+
+                bypass = True
+                assert runner() == 0
+                bypass = False
+
+            with patch('os.getresgid', patched):
+                with pytest.raises(QuickenError) as e:
+                    runner()
+
+                for s in expected_strings:
+                    assert s in str(e)
+
+                bypass = True
+                assert runner() == 0
+                bypass = False
+
+
+def test_runner_reloads_server_on_different_groups():
+    # Given the server has been started with supplemental groups 1, 2, 3
+    # And the decorated function is executed with supplemental groups 1, 2
+    # Then the server should be reloaded, and the decorated function executed
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            output_file.write_text(
+                f'{os.getpid()} {os.getppid()}', encoding='utf-8')
+            return 0
+        return inner
+
+    with isolated_filesystem() as path:
+        output_file = path / 'test.txt'
+
+        with contained_children():
+            with patch('os.getgroups', lambda: (1, 2, 3)):
+                assert runner() == 0
+            main_pid = str(os.getpid())
+            runner_pid_1, parent_pid_1 = output_file.read_text(
+                encoding='utf-8').strip().split()
+            assert runner_pid_1 != main_pid
+            assert parent_pid_1 != runner_pid_1
+            assert parent_pid_1 != main_pid
+
+            with patch('os.getgroups', lambda: (1, 2)):
+                assert runner() == 0
+            runner_pid_2, parent_pid_2 = output_file.read_text(
+                encoding='utf-8').strip().split()
+            assert runner_pid_2 != main_pid
+            assert parent_pid_2 != runner_pid_2
+            assert parent_pid_2 != main_pid
+            assert parent_pid_1 != parent_pid_2
+            assert runner_pid_1 != runner_pid_2
+
+
+def test_runner_reloads_server_on_different_gid():
+    # Given the server has been started with real gid 1
+    # And the decorated function is executed with real gid 2
+    # Then the server should be reloaded, and the decorated function executed
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            output_file.write_text(
+                f'{os.getpid()} {os.getppid()}', encoding='utf-8')
+            return 0
+        return inner
+
+    with isolated_filesystem() as path:
+        output_file = path / 'test.txt'
+
+        with contained_children():
+            with patch('os.getgid', lambda: 1):
+                assert runner() == 0
+            main_pid = str(os.getpid())
+            runner_pid_1, parent_pid_1 = output_file.read_text(
+                encoding='utf-8').strip().split()
+            assert runner_pid_1 != main_pid
+            assert parent_pid_1 != runner_pid_1
+            assert parent_pid_1 != main_pid
+
+            with patch('os.getgid', lambda: 2):
+                assert runner() == 0
+            runner_pid_2, parent_pid_2 = output_file.read_text(
+                encoding='utf-8').strip().split()
+            assert runner_pid_2 != main_pid
+            assert parent_pid_2 != runner_pid_2
+            assert parent_pid_2 != main_pid
+            assert parent_pid_1 != parent_pid_2
+            assert runner_pid_1 != runner_pid_2

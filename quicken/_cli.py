@@ -14,11 +14,10 @@ from typing import Callable, Dict, Optional
 from fasteners import InterProcessLock
 
 from ._client import Client
-from ._typing import NoneFunction
 from ._constants import socket_name, server_state_name
 from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
-from ._typing import JSONValue
+from ._typing import JSONValue, NoneFunction
 from ._xdg import cache_dir, chdir, RuntimeDir
 
 
@@ -37,6 +36,46 @@ class QuickenError(Exception):
     pass
 
 
+def check_res_ids():
+    ruid, euid, suid = os.getresuid()
+    if not ruid == euid == suid:
+        raise QuickenError(
+            f'real uid ({ruid}), effective uid ({euid}), and saved uid ({suid})'
+            ' must be the same'
+        )
+
+    rgid, egid, sgid = os.getresgid()
+    if not rgid == egid == sgid:
+        raise QuickenError(
+            f'real gid ({rgid}), effective gid ({egid}), and saved gid ({sgid})'
+            ' must be the same'
+        )
+
+
+def need_server_reload(manager, reload_server, user_data):
+    server_state = manager.server_state
+    gid = os.getgid()
+    if gid != server_state['gid']:
+        logger.info('Reloading server due to gid change')
+        return True
+
+    # XXX: Will not have the intended effect on macOS, see os.getgroups() for
+    #  details.
+    groups = os.getgroups()
+    if set(groups) != set(server_state['groups']):
+        logger.info('Reloading server due to changed groups')
+        return True
+
+    if reload_server:
+        previous_user_data = manager.user_data
+        if reload_server(previous_user_data, user_data):
+            logger.info('Reload requested by callback, stopping server.')
+            return True
+
+    # TODO: Restart based on library version.
+    return False
+
+
 def _server_runner_wrapper(
     name: str,
     main_provider: MainProvider,
@@ -45,22 +84,19 @@ def _server_runner_wrapper(
     runtime_dir_path: Optional[str] = None,
     log_file: Optional[str] = None,
     server_idle_timeout: Optional[float] = None,
-    bypass_server: Callable[[], bool] = None,
     reload_server: Callable[[JSONDict, JSONDict], bool] = None,
     user_data: JSONDict = None,
 ) -> Optional[int]:
     """Run operation in server identified by name, starting it if required.
     """
 
-    main_provider = partial(with_reset_authkey, main_provider)
+    check_res_ids()
 
     if log_file is None:
         log_file = cache_dir(f'quicken-{name}') / 'server.log'
         log_file = Path(log_file).absolute()
 
-    if bypass_server and bypass_server():
-        logger.debug('Bypassing server')
-        return main_provider()()
+    main_provider = partial(with_reset_authkey, main_provider)
 
     runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
 
@@ -76,13 +112,9 @@ def _server_runner_wrapper(
             logger.info('Failed to connect to server due to %s.', e)
             need_start = True
         else:
-            if reload_server:
-                previous_user_data = manager.server_state['user_data']
-                if reload_server(previous_user_data, user_data):
-                    logger.info('Reload requested, stopping server.')
-                    manager.stop_server()
-                    need_start = True
-            # TODO: Restart based on library version.
+            if need_server_reload(manager, reload_server, user_data):
+                manager.stop_server()
+                need_start = True
 
         if need_start:
             logger.info('Starting server')
@@ -161,13 +193,16 @@ def _cli_factory(
     def function_handler(main_provider: MainProvider) -> MainFunction:
         @wraps(main_provider)
         def wrapper() -> Optional[int]:
+            if bypass_server and bypass_server():
+                logger.debug('Bypassing server by request.')
+                return main_provider()()
+
             return _server_runner_wrapper(
                 name,
                 main_provider,
                 runtime_dir_path=runtime_dir_path,
                 log_file=log_file,
                 server_idle_timeout=server_idle_timeout,
-                bypass_server=bypass_server,
                 reload_server=reload_server,
                 user_data=user_data,
             )
