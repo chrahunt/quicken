@@ -4,20 +4,20 @@ import json
 import logging
 import multiprocessing
 import os
-import sys
 
 from contextlib import contextmanager
-from functools import partial, wraps
+from functools import partial
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 from fasteners import InterProcessLock
 
+from . import QuickenError
 from ._client import Client
 from ._constants import socket_name, server_state_name
 from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
-from ._typing import JSONValue, NoneFunction
+from ._typing import JSONType
 from ._xdg import cache_dir, chdir, RuntimeDir
 
 
@@ -26,14 +26,6 @@ logger = logging.getLogger(__name__)
 
 MainFunction = Callable[[], Optional[int]]
 MainProvider = Callable[[], MainFunction]
-CliFactoryT = Callable[[], NoneFunction]
-JSONDict = Dict[str, JSONValue]
-
-
-class QuickenError(Exception):
-    """Generic error during server start - message has details.
-    """
-    pass
 
 
 def check_res_ids():
@@ -84,13 +76,18 @@ def _server_runner_wrapper(
     runtime_dir_path: Optional[str] = None,
     log_file: Optional[str] = None,
     server_idle_timeout: Optional[float] = None,
-    reload_server: Callable[[JSONDict, JSONDict], bool] = None,
-    user_data: JSONDict = None,
+    reload_server: Callable[[JSONType, JSONType], bool] = None,
+    user_data: JSONType = None,
 ) -> Optional[int]:
     """Run operation in server identified by name, starting it if required.
     """
 
     check_res_ids()
+
+    try:
+        json.dumps(user_data)
+    except TypeError as e:
+        raise QuickenError('user_data must be serializable') from e
 
     if log_file is None:
         log_file = cache_dir(f'quicken-{name}') / 'server.log'
@@ -137,92 +134,6 @@ def _server_runner_wrapper(
     response = client.send(Request(RequestTypes.wait_process_done, None))
     client.close()
     return response.contents
-
-
-def _cli_factory(
-    name: str,
-    # /,
-    *,
-    runtime_dir_path: Optional[str] = None,
-    log_file: Optional[str] = None,
-    server_idle_timeout: Optional[float] = None,
-    bypass_server: Callable[[], bool] = None,
-    reload_server: Callable[[JSONDict, JSONDict], bool] = None,
-    user_data: JSONDict = None,
-):
-    """Decorator to mark a function that provides the main script entry point.
-
-    To benefit most from the daemon speedup, you must do required imports
-    within the factory function itself and then have the returned function
-    itself do a minimal amount of configuration - only those things dependent
-    on e.g. environment/cwd.
-
-    If any imported top-level modules make use of environment then they must be
-    reconfigured on invocation of the cli, otherwise the environment of future
-    clients will not be taken into account.
-
-    Args:
-        name: the name used for the socket file.
-        runtime_dir_path: the directory used for the socket and pid file. If not
-            provided then we fall back to:
-            `$XDG_RUNTIME_DIR/quicken-{name}` or `$TMPDIR/quicken-{name}-{uid}`
-            or `/tmp/quicken-{name}-{uid}`. If the directory exists it must be
-            owned by the current user and have permissions 700.
-        log_file: optional log file used by the server, must be an absolute
-            path. If not provided the default is
-            `$XDG_CACHE_HOME/quicken-{name}/server.log` or
-            `$HOME/.cache/quicken-{name}/server.log`.
-        server_idle_timeout: time in seconds after which the server will shut
-            down if no requests are being processed.
-        bypass_server: if True then run command directly instead of trying to
-            use daemon.
-        reload_server: if True then restart the server before executing the
-            function.
-        user_data: JSON-serializable data provided to reload_server
-
-    Throws:
-        QuickenError: If any directory used by runtime_dir does not have the
-            correct permissions.
-    """
-
-    try:
-        json.dumps(user_data)
-    except TypeError as e:
-        raise QuickenError('user_data must be serializable') from e
-
-    def function_handler(main_provider: MainProvider) -> MainFunction:
-        @wraps(main_provider)
-        def wrapper() -> Optional[int]:
-            if bypass_server and bypass_server():
-                logger.debug('Bypassing server by request.')
-                return main_provider()()
-
-            return _server_runner_wrapper(
-                name,
-                main_provider,
-                runtime_dir_path=runtime_dir_path,
-                log_file=log_file,
-                server_idle_timeout=server_idle_timeout,
-                reload_server=reload_server,
-                user_data=user_data,
-            )
-
-        return wrapper
-
-    return function_handler
-
-
-def _cli_factory_win(*_, **__):
-    def function_handler(main_provider: MainProvider) -> MainFunction:
-        return main_provider()
-
-    return function_handler
-
-
-if sys.platform.startswith('win'):
-    cli_factory = _cli_factory_win
-else:
-    cli_factory = _cli_factory
 
 
 def reset_authkey():

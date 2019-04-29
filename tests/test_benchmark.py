@@ -28,11 +28,16 @@ test_quicken_program = '''
 import os
 import sys
 
-from quicken import cli_factory
+from quicken import quicken
 
+
+def bypass():
+    return 'QUICKEN_BYPASS' in os.environ
+    
+    
 # Timeout with enough time to stay up for the server-reuse tests but go down
 # for the startup tests.
-@cli_factory(os.environ['TEST_SERVER_NAME'], server_idle_timeout=2)
+@quicken(os.environ['TEST_SERVER_NAME'], bypass_server=bypass, server_idle_timeout=2)
 def wrapper():
     import time
     # Represents imports and module initialization.
@@ -69,7 +74,24 @@ def test_python_program_time(benchmark):
 
 def test_quicken_import_time(benchmark):
     def target():
-        return run_code('from quicken import cli_factory')
+        return run_code('from quicken import quicken')
+
+    result = benchmark(target)
+    assert result == 0, 'Process must have exited cleanly'
+
+
+def test_quicken_cli_import_time(benchmark):
+    def target():
+        return run_code('import quicken._cli')
+
+    result = benchmark(target)
+    assert result == 0, 'Process must have exited cleanly'
+
+
+def test_quicken_bypass_run_time(benchmark):
+    def target():
+        with env(TEST_SERVER_NAME='', QUICKEN_BYPASS='1'):
+            return run_code(test_quicken_program)
 
     result = benchmark(target)
     assert result == 0, 'Process must have exited cleanly'
