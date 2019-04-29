@@ -20,7 +20,6 @@ import logging.config
 import multiprocessing
 import os
 import signal
-import socket
 import sys
 import time
 import traceback
@@ -28,10 +27,8 @@ import traceback
 from abc import ABC, abstractmethod
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
-import daemon
-import daemon.daemon
 import psutil
 
 from .__version__ import __version__
@@ -55,14 +52,13 @@ from ._xdg import RuntimeDir
 logger = ContextLogger(logging.getLogger(__name__), prefix='server_')
 
 
-RequestCallbackT = Callable[[socket.socket], None]
-
-
 def run(
-        socket_handler: RequestCallbackT,
-        runtime_dir: RuntimeDir,
-        server_idle_timeout: Optional[float] = None,
-        log_file: Optional[Path] = None):
+    socket_handler,
+    runtime_dir: RuntimeDir,
+    server_idle_timeout: Optional[float],
+    log_file: Optional[Path],
+    user_data: Optional[Any],
+):
     """Start the server in the background.
 
     The function returns only when the server has successfully started.
@@ -85,53 +81,31 @@ def run(
         # actual runtime dir and not at the path that happens to exist at the
         # time.
         'working_directory': runtime_dir.fileno(),
-        # Keep runtime directory open.
-        'files_preserve': [runtime_dir.fileno()],
     }
 
-    target = functools.partial(_run_server, socket_handler, server_idle_timeout)
+    target = functools.partial(
+        _run_server,
+        socket_handler,
+        server_idle_timeout,
+        log_file,
+        user_data,
+    )
     return run_in_process(
-        daemonize, args=(target, daemon_options, log_file), allow_detach=True)
+        daemonize,
+        args=(target, daemon_options),
+        allow_detach=True,
+    )
 
 
-def daemonize(detach, target, daemon_options: Dict, log_file=None):
-    def patch_python_daemon():
-        # We don't want to close any open files right now since we
-        # cannot distinguish between the ones we want to keep and
-        # those we do not. For our use case there should not be
-        # many opened files anyway.
-        # XXX: If we do eventually want to close open files, keep in mind
-        #  that it may be slow and there are platform-specific speedups we
-        #  can do.
-        def patched(**_):
-            return
-        daemon.daemon.close_all_open_files = patched
+def daemonize(detach, target, daemon_options: Dict):
+    os.chdir(daemon_options['working_directory'])
 
-    patch_python_daemon()
-
-    def detach_process_context():
-        """The default behavior in python-daemon is to let the parent die, but
-        that doesn't work for us - the parent becomes the first client and
-        should stay alive.
-        """
-        # Make the process a process leader - signals sent to the parent group
-        # will no longer propagate by default.
-        os.setsid()
-
-    # If detach_process is unspecified in the constructor then python-daemon
-    # attempts to determine its value dynamically. This involves accessing stdin
-    # which can fail if it has been overridden (as in unit tests).
-    ctx = daemon.DaemonContext(detach_process=False)
-    for k, v in daemon_options.items():
-        setattr(ctx, k, v)
-
-    # We handle detaching.
-    ctx.detach_process = False
+    # Make the process a process leader - signals sent to the parent group
+    # will no longer propagate by default.
+    os.setsid()
 
     # Secure umask by default.
-    ctx.umask = 0o077
-
-    detach_process_context()
+    os.umask(0o077)
 
     # Reset signal handlers.
     # We omit SIGPIPE so the default Python signal handler correctly translates
@@ -142,15 +116,22 @@ def daemonize(detach, target, daemon_options: Dict, log_file=None):
     # Reset signal disposition.
     signal.pthread_sigmask(signal.SIG_SETMASK, set())
 
-    with ctx:
-        if log_file:
-            _configure_logging(log_file, loglevel='DEBUG')
-        target(detach)
+    # Redirect streams.
+    devnull = os.open(os.devnull, os.O_RDWR)
+    os.dup2(devnull, sys.stdin.fileno())
+    os.dup2(devnull, sys.stdout.fileno())
+    os.dup2(devnull, sys.stderr.fileno())
+
+    target(detach)
 
 
 def _run_server(
-        callback: RequestCallbackT,
-        server_idle_timeout: Optional[float], done) -> None:
+    callback,
+    server_idle_timeout: Optional[float],
+    log_file,
+    user_data,
+    done
+) -> None:
     """Server that provides sockets to `callback`.
 
     Method must be invoked when cwd is suitable for secure creation of files.
@@ -162,6 +143,9 @@ def _run_server(
         done: callback function invoked after setup and before we start handling
             requests
     """
+    if log_file:
+        _configure_logging(log_file, loglevel='DEBUG')
+
     logger.debug('_run_server()')
 
     loop = asyncio.new_event_loop()
@@ -208,6 +192,7 @@ def _run_server(
         'create_time': process.create_time(),
         'version': __version__,
         'pid': pid,
+        'user_data': user_data,
     }
     Path(server_state_name).write_text(
         json.dumps(server_state), encoding='utf-8')
@@ -361,8 +346,6 @@ class ProcessConnectionHandler(ConnectionHandler):
     def _start_callback(self, process_state) -> AsyncProcess:
         def setup_child():
             ProcessState.apply_to_current_process(process_state)
-            # Reset authkey since we remove it for server startup.
-            multiprocessing.current_process().authkey = os.urandom(32)
             try:
                 sys.exit(self._callback())
             except SystemExit as e:

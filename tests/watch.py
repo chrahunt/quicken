@@ -66,7 +66,6 @@ def _wait_for(action: Action, timeout: float = 5) -> bool:
             return True
 
     def timeout_handler(_signum, _frame):
-        logger.debug('File wait timeout fired')
         observer.stop()
 
     signal.signal(signal.SIGALRM, timeout_handler)

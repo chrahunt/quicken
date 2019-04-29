@@ -6,7 +6,8 @@ import multiprocessing
 import os
 import sys
 
-from functools import wraps
+from contextlib import contextmanager
+from functools import partial, wraps
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -17,14 +18,17 @@ from ._typing import NoneFunction
 from ._constants import socket_name, server_state_name
 from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
+from ._typing import JSONValue
 from ._xdg import cache_dir, chdir, RuntimeDir
 
 
 logger = logging.getLogger(__name__)
 
 
+MainFunction = Callable[[], Optional[int]]
+MainProvider = Callable[[], MainFunction]
 CliFactoryT = Callable[[], NoneFunction]
-BoolProvider = Callable[[], bool]
+JSONDict = Dict[str, JSONValue]
 
 
 class QuickenError(Exception):
@@ -33,15 +37,87 @@ class QuickenError(Exception):
     pass
 
 
+def _server_runner_wrapper(
+    name: str,
+    main_provider: MainProvider,
+    # /,
+    *,
+    runtime_dir_path: Optional[str] = None,
+    log_file: Optional[str] = None,
+    server_idle_timeout: Optional[float] = None,
+    bypass_server: Callable[[], bool] = None,
+    reload_server: Callable[[JSONDict, JSONDict], bool] = None,
+    user_data: JSONDict = None,
+) -> Optional[int]:
+    """Run operation in server identified by name, starting it if required.
+    """
+
+    main_provider = partial(with_reset_authkey, main_provider)
+
+    if log_file is None:
+        log_file = cache_dir(f'quicken-{name}') / 'server.log'
+        log_file = Path(log_file).absolute()
+
+    if bypass_server and bypass_server():
+        logger.debug('Bypassing server')
+        return main_provider()()
+
+    runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
+
+    manager = CliServerManager(
+        main_provider, runtime_dir, log_file, server_idle_timeout, user_data
+    )
+
+    with manager.lock:
+        need_start = False
+        try:
+            client = manager.connect()
+        except ConnectionFailed as e:
+            logger.info('Failed to connect to server due to %s.', e)
+            need_start = True
+        else:
+            if reload_server:
+                previous_user_data = manager.server_state['user_data']
+                if reload_server(previous_user_data, user_data):
+                    logger.info('Reload requested, stopping server.')
+                    manager.stop_server()
+                    need_start = True
+            # TODO: Restart based on library version.
+
+        if need_start:
+            logger.info('Starting server')
+            manager.start_server()
+            client = manager.connect()
+
+    proxy = SignalProxy()
+    # We must block signals before requesting remote process start otherwise
+    # a user signal to the client may race with our ability to propagate it.
+    with blocked_signals(forwarded_signals):
+        state = ProcessState.for_current_process()
+        logger.debug('Requesting process start')
+        req = Request(RequestTypes.run_process, state)
+        response = client.send(req)
+        pid = response.contents
+        logger.debug('Process running with pid: %d', pid)
+        proxy.set_target(pid)
+
+    logger.debug('Waiting for process to finish')
+    response = client.send(Request(RequestTypes.wait_process_done, None))
+    client.close()
+    return response.contents
+
+
 def _cli_factory(
-        name: str,
-        *,
-        runtime_dir_path: Optional[str] = None,
-        log_file: Optional[str] = None,
-        server_idle_timeout: Optional[float] = None,
-        bypass_server: BoolProvider = None,
-        reload_server: BoolProvider = None,
-        ):
+    name: str,
+    # /,
+    *,
+    runtime_dir_path: Optional[str] = None,
+    log_file: Optional[str] = None,
+    server_idle_timeout: Optional[float] = None,
+    bypass_server: Callable[[], bool] = None,
+    reload_server: Callable[[JSONDict, JSONDict], bool] = None,
+    user_data: JSONDict = None,
+):
     """Decorator to mark a function that provides the main script entry point.
 
     To benefit most from the daemon speedup, you must do required imports
@@ -70,74 +146,68 @@ def _cli_factory(
             use daemon.
         reload_server: if True then restart the server before executing the
             function.
+        user_data: JSON-serializable data provided to reload_server
 
     Throws:
         QuickenError: If any directory used by runtime_dir does not have the
             correct permissions.
     """
-    def inner_cli_factory(factory_fn: CliFactoryT) -> NoneFunction:
-        @wraps(factory_fn)
-        def run_cli() -> Optional[int]:
-            """
-            Returns:
-                Result from function or remote execution, suitable for passing
-                to :func:`sys.exit`.
-            """
-            nonlocal log_file
 
-            if log_file is None:
-                log_file = cache_dir(f'quicken-{name}') / 'server.log'
-            log_file = Path(log_file).absolute()
+    try:
+        json.dumps(user_data)
+    except TypeError as e:
+        raise QuickenError('user_data must be serializable') from e
 
-            if bypass_server and bypass_server():
-                logger.debug('Bypassing server')
-                return factory_fn()()
+    def function_handler(main_provider: MainProvider) -> MainFunction:
+        @wraps(main_provider)
+        def wrapper() -> Optional[int]:
+            return _server_runner_wrapper(
+                name,
+                main_provider,
+                runtime_dir_path=runtime_dir_path,
+                log_file=log_file,
+                server_idle_timeout=server_idle_timeout,
+                bypass_server=bypass_server,
+                reload_server=reload_server,
+                user_data=user_data,
+            )
 
-            runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
+        return wrapper
 
-            client = None
-            with CliServerManager(
-                    factory_fn, runtime_dir, log_file, server_idle_timeout) as manager:
-                try:
-                    client = manager.connect()
-                    if reload_server and reload_server():
-                        logger.debug('Reloading server')
-                        client = manager.restart()
-                    # TODO: Get server version.
-                    # TODO: Get server context and kill without pid.
-                except ConnectionRefusedError:
-                    logger.warning(
-                        'Failed to connect to server - executing cli directly.')
-
-            if not client:
-                multiprocessing.current_process().authkey = os.urandom(32)
-                return factory_fn()()
-
-            return _run_client(client)
-
-        return run_cli
-
-    return inner_cli_factory
+    return function_handler
 
 
-def _cli_factory_win(
-    *args,
-    **kwargs,
-):
-    def inner_cli_factory(factory_fn: CliFactoryT) -> NoneFunction:
-        @wraps(factory_fn)
-        def run_cli() -> Optional[int]:
-            return factory_fn()()
+def _cli_factory_win(*_, **__):
+    def function_handler(main_provider: MainProvider) -> MainFunction:
+        return main_provider()
 
-        return run_cli
-
-    return inner_cli_factory
+    return function_handler
 
 
 if sys.platform.startswith('win'):
     cli_factory = _cli_factory_win
 else:
     cli_factory = _cli_factory
+
+
+def reset_authkey():
+    multiprocessing.current_process().authkey = os.urandom(32)
+
+
+def with_reset_authkey(main_provider):
+    """Ensure that user code is not executed without an authkey set.
+    """
+    main = main_provider()
+
+    def inner():
+        reset_authkey()
+        return main()
+
+    return inner
+
+
+class ConnectionFailed(Exception):
+    pass
 
 
 class CliServerManager:
@@ -148,7 +218,7 @@ class CliServerManager:
     """
     def __init__(
             self, factory_fn, runtime_dir: RuntimeDir, log_file,
-            server_idle_timeout):
+            server_idle_timeout, user_data):
         """
         Args:
             factory_fn: function that provides the server request handler
@@ -156,75 +226,79 @@ class CliServerManager:
             log_file: server log file
             server_idle_timeout: idle timeout communicated to server if the
                 process of connecting results in server start
+            user_data: added to server state
         """
         self._factory = factory_fn
         self._runtime_dir = runtime_dir
         self._log_file = log_file
         self._idle_timeout = server_idle_timeout
+        self._user_data = user_data
         self._lock = InterProcessLock('admin')
-        # We initialize the Client and Listener classes without an authkey
-        # parameter since there's no way to pre-share the secret securely
-        # between processes not part of the same process tree. However, the
-        # internal Client/Listener used as part of
-        # multiprocessing.resource_sharer DOES initialize its own Client and
-        # Listener with multiprocessing.current_process().authkey. We must have
-        # some value so we use this dummy value.
-        multiprocessing.current_process().authkey = b'0' * 32
 
     def connect(self) -> Client:
-        """Attempt to connect to the server, starting it if required.
-
-        Args:
-            timeout: seconds to wait for successful connection or startup
+        """Attempt to connect to the server.
 
         Returns:
             Client connected to the server
-        """
-        assert self._lock.acquired, 'Connect must be called under lock.'
-        try:
-            return self._get_client()
-        except FileNotFoundError:
-            # Server not up, no problem, we'll try to start it.
-            logger.debug('Server not up, starting it.')
-        except ConnectionRefusedError:
-            socket_file = self._runtime_dir.path(socket_name)
-            # Server may have died unexpectedly.
-            logger.warning('Could not connect to server, starting it.')
-            # Clean up the socket file before proceeding.
-            socket_file.unlink()
 
-        self._start_server()
-
-        # Try to connect again, this time we don't catch anything, leave it to
-        # the caller.
-        return self._get_client()
-
-    def restart(self) -> Client:
-        """Restart the server and reconnect.
-        """
-        self._stop_server()
-        return self.connect()
-
-    def _get_client(self) -> Client:
-        """
         Raises:
-            FileNotFoundError if the socket file is not present
-            ConnectionRefusedError if the socket file is present but the server
-                is not accepting connections
+            ConnectionFailed on connection failure (server not up or accepting)
         """
-        with chdir(self._runtime_dir):
-            return Client(socket_name)
+        assert self._lock.acquired, 'connect must be called under lock.'
 
-    def _get_server_state(self) -> Dict:
-        """Retrieve server state data.
+        with chdir(self._runtime_dir):
+            try:
+                return Client(socket_name)
+            except FileNotFoundError as e:
+                raise ConnectionFailed('File not found') from e
+            except ConnectionRefusedError as e:
+                raise ConnectionFailed('Connection refused') from e
+
+    @property
+    def server_state(self):
+        with chdir(self._runtime_dir):
+            text = Path(server_state_name).read_text(encoding='utf-8')
+        return json.loads(text)
+
+    @property
+    def user_data(self):
+        """Returns user data for the current server.
         """
-        with chdir(self._runtime_dir):
-            return json.loads(
-                Path(server_state_name).read_text(encoding='utf-8'))
+        return self.server_state['user_data']
 
-    def _stop_server(self):
+    def start_server(self):
+        """Start server as background process.
+
+        This function only returns in the parent, not the background process.
+
+        By the time this function returns it is safe to call connect().
+        """
+        assert self._lock.acquired, 'start_server must be called under lock.'
+        # XXX: Should have logging around this, for timing.
+        main = self._factory()
+        # Lazy import so we only take the time to import if we have to start
+        # the server.
+        # XXX: Should have logging around this, for timing.
+        from ._server import run
+
+        with chdir(self._runtime_dir):
+            try:
+                os.unlink(socket_name)
+            except FileNotFoundError:
+                pass
+
+        run(
+            main,
+            log_file=self._log_file,
+            runtime_dir=self._runtime_dir,
+            server_idle_timeout=self._idle_timeout,
+            user_data=self._user_data,
+        )
+
+    def stop_server(self):
+        assert self._lock.acquired, 'stop_server must be called under lock.'
         from psutil import NoSuchProcess, Process
-        server_state = self._get_server_state()
+        server_state = self.server_state
         pid = server_state['pid']
         create_time = server_state['create_time']
         try:
@@ -256,76 +330,22 @@ class CliServerManager:
         # we are concerned with.
         process.terminate()
 
-    def _start_server(self):
-        """Start server as background process.
-
-        The socket for the server has been created by the time this function
-        returns.
-
-        This function only returns in the parent, not the background process.
-        """
-        cli = self._factory()
-        # Lazy import so we only take the time to import if we have to start
-        # the server.
-        from ._server import run
-        run(
-            cli, log_file=self._log_file,
-            runtime_dir=self._runtime_dir,
-            server_idle_timeout=self._idle_timeout)
-
-    def __enter__(self):
-        """Enter the server admin lock context.
-        """
+    @property
+    @contextmanager
+    def lock(self):
         with chdir(self._runtime_dir):
-            # TODO: Ensure that this creates our lock file with 700 since
-            #  otherwise it might not be respected.
             self._lock.acquire()
-        return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Exit the server admin lock context.
-        """
-        self._lock.release()
+        # We initialize the Client and Listener classes without an authkey
+        # parameter since there's no way to pre-share the secret securely
+        # between processes not part of the same process tree. However, the
+        # internal Client/Listener used as part of
+        # multiprocessing.resource_sharer DOES initialize its own Client and
+        # Listener with multiprocessing.current_process().authkey. We must have
+        # some value so we use this dummy value.
+        multiprocessing.current_process().authkey = b'0' * 32
 
-
-def _run_client(client: Client) -> int:
-    """Run command client against daemon listening at provided `socket_file`.
-
-    Sends process context and waits for exit code.
-
-    Process context includes:
-    - environment
-    - cwd
-    - command line
-    - file descriptors for stdin/out/err
-
-    Args:
-        sock: Socket connected to server. Must be a type appropriate for passing
-            file descriptors.
-
-    Returns:
-        exit code of the process
-
-    Raises:
-        ConnectionRefusedError if server is not listening/available.
-    """
-    logger.debug('Starting client communication')
-    # Assume that we've already vetted the server and now we just need to run
-    # the process.
-
-    proxy = SignalProxy()
-    # We must block signals before requesting remote process start otherwise
-    # a user signal to the client may race with our ability to propagate it.
-    with blocked_signals(forwarded_signals):
-        state = ProcessState.for_current_process()
-        logger.debug('Requesting process start')
-        req = Request(RequestTypes.run_process, state)
-        response = client.send(req)
-        pid = response.contents
-        logger.debug('Process running with pid: %d', pid)
-        proxy.set_target(pid)
-
-    logger.debug('Waiting for process to finish')
-    response = client.send(Request(RequestTypes.wait_process_done, None))
-    client.close()
-    return response.contents
+        try:
+            yield
+        finally:
+            self._lock.release()
