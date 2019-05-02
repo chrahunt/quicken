@@ -6,9 +6,6 @@ import logging
 import os
 import sys
 
-from dataclasses import dataclass
-from pathlib import Path
-
 # Registers TextIOWrapper handler.
 from . import _multiprocessing
 from ._typing import MYPY_CHECK_RUNNING
@@ -18,41 +15,52 @@ if MYPY_CHECK_RUNNING:
 
 
 class RequestTypes:
-    get_server_state = 'get_server_state'
     run_process = 'run_process'
     wait_process_done = 'wait_process_done'
 
 
-@dataclass
 class Request:
-    name: str
-    contents: Any
+    def __init__(self, name: str, contents: Any):
+        self.name = name
+        self.contents = contents
 
 
-@dataclass
 class Response:
-    contents: Any
+    def __init__(self, contents: Any):
+        self.contents = contents
 
 
-@dataclass
 class StdStreams:
-    stdin: io.TextIOWrapper
-    stdout: io.TextIOWrapper
-    stderr: io.TextIOWrapper
+    def __init__(
+        self,
+        stdin: io.TextIOWrapper,
+        stdout: io.TextIOWrapper,
+        stderr: io.TextIOWrapper,
+    ):
+        self.stdin = stdin
+        self.stdout = stdout
+        self.stderr = stderr
 
 
-@dataclass
 class ProcessState:
-    std_streams: StdStreams
-    cwd: Path
-    umask: int
-    environment: Dict[str, str]
-    argv: List[str]
+    def __init__(
+        self,
+        std_streams: StdStreams,
+        cwd: str,
+        umask: int,
+        environment: Dict[str, str],
+        argv: List[str],
+    ):
+        self.std_streams = std_streams
+        self.cwd = cwd
+        self.umask = umask
+        self.environment = environment
+        self.argv = argv
 
     @staticmethod
     def for_current_process() -> ProcessState:
         streams = StdStreams(sys.stdin, sys.stdout, sys.stderr)
-        cwd = Path.cwd()
+        cwd = os.getcwd()
         # Only way to get umask is to set umask.
         umask = os.umask(0o077)
         os.umask(umask)
@@ -92,10 +100,3 @@ class ProcessState:
         os.umask(state.umask)
         os.environ = copy.deepcopy(state.environment)
         sys.argv = list(state.argv)
-
-
-@dataclass
-class ServerState:
-    start_time: float
-    pid: int
-    context: Dict[str, str]

@@ -10,13 +10,11 @@ import socket
 
 from contextlib import contextmanager
 from functools import partial
-from pathlib import Path
-
-from fasteners import InterProcessLock
 
 from . import QuickenError
 from ._client import Client
 from ._constants import socket_name, server_state_name, stop_socket_name
+from ._imports import InterProcessLock
 from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
 from ._typing import MYPY_CHECK_RUNNING
@@ -95,8 +93,8 @@ def _server_runner_wrapper(
         raise QuickenError('user_data must be serializable') from e
 
     if log_file is None:
-        log_file = cache_dir(f'quicken-{name}') / 'server.log'
-        log_file = Path(log_file).absolute()
+        log_file = os.path.join(cache_dir(f'quicken-{name}'), 'server.log')
+        log_file = os.path.abspath(log_file)
 
     main_provider = partial(with_reset_authkey, main_provider)
 
@@ -202,7 +200,8 @@ class CliServerManager:
     @property
     def server_state(self):
         with chdir(self._runtime_dir):
-            text = Path(server_state_name).read_text(encoding='utf-8')
+            with open(server_state_name, encoding='utf-8') as f:
+                text = f.read()
         return json.loads(text)
 
     @property

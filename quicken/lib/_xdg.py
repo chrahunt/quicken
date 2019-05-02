@@ -4,7 +4,6 @@ import os
 import stat
 
 from contextlib import contextmanager
-from pathlib import Path
 
 from ._typing import MYPY_CHECK_RUNNING
 
@@ -69,7 +68,7 @@ class RuntimeDir:
         try:
             self._fd = os.open(dir_path, os.O_RDONLY)
         except FileNotFoundError:
-            Path(dir_path).mkdir(mode=0o700)
+            os.mkdir(dir_path, mode=0o700)
             self._fd = os.open(dir_path, os.O_RDONLY)
         # Test after open to avoid toctou, also since we do not trust the mode
         # passed to mkdir.
@@ -107,6 +106,6 @@ def runtime_dir(base_name):
 
 def cache_dir(base_name):
     try:
-        return Path(os.environ['XDG_CACHE_HOME']) / base_name
+        return os.path.join(os.environ['XDG_CACHE_HOME'], base_name)
     except KeyError:
-        return Path(os.environ['HOME']) / '.cache' / base_name
+        return os.path.join(os.environ['HOME'], '.cache', base_name)

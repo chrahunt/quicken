@@ -13,7 +13,6 @@ implementation and do not
 """
 from __future__ import annotations
 
-import asyncio
 import contextvars
 import functools
 import json
@@ -29,11 +28,11 @@ import traceback
 
 from abc import ABC, abstractmethod
 from contextlib import ExitStack
-from pathlib import Path
 
 from .. import __version__
 from ._asyncio import DeadlineTimer
 from ._constants import socket_name, stop_socket_name, server_state_name
+from ._imports import asyncio
 from ._logging import ContextLogger, NullContextFilter, UTCFormatter
 from ._multiprocessing import run_in_process
 from ._multiprocessing_asyncio import (
@@ -44,7 +43,7 @@ from ._multiprocessing_asyncio import (
     ListenerStopped
 )
 from ._typing import MYPY_CHECK_RUNNING
-from ._protocol import ProcessState, Request, RequestTypes, Response, ServerState
+from ._protocol import ProcessState, Request, RequestTypes, Response
 from ._signal import settable_signals
 from ._xdg import RuntimeDir
 
@@ -61,7 +60,7 @@ def run(
     socket_handler,
     runtime_dir: RuntimeDir,
     server_idle_timeout: Optional[float],
-    log_file: Optional[Path],
+    log_file: Optional[str],
     user_data: Optional[Any],
 ):
     """Start the server in the background.
@@ -206,8 +205,9 @@ def _run_server(
         'groups': os.getgroups(),
         'gid': os.getgid(),
     }
-    Path(server_state_name).write_text(
-        json.dumps(server_state), encoding='utf-8')
+
+    with open(server_state_name, 'w', encoding='utf-8') as f:
+        json.dump(server_state, f)
 
     logger.debug('Starting server')
     server.serve()
@@ -280,12 +280,8 @@ class ProcessConnectionHandler(ConnectionHandler):
             nonlocal process, process_task
             logger.debug('Waiting for request')
             request = await queue.get()
-            if request.name == RequestTypes.get_server_state:
-                state = ServerState(self._start_time, self._pid, self._context)
-                logger.debug('Sending server state')
-                await connection.send(Response(state))
 
-            elif request.name == RequestTypes.run_process:
+            if request.name == RequestTypes.run_process:
                 assert process is None, \
                     'Process must not have been started'
                 process_state = request.contents
@@ -527,8 +523,9 @@ class Server:
             self._set_idle_timer()
 
 
-def _configure_logging(logfile: Path, loglevel: str) -> None:
-    logfile.parent.mkdir(parents=True, exist_ok=True)
+def _configure_logging(logfile: str, loglevel: str) -> None:
+    parent = os.path.dirname(logfile)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
     # TODO: Make fully configurable.
     logging.config.dictConfig({
         'version': 1,
