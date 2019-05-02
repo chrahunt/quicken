@@ -6,6 +6,7 @@ import json
 import logging
 import multiprocessing
 import os
+import socket
 
 from contextlib import contextmanager
 from functools import partial
@@ -15,7 +16,7 @@ from fasteners import InterProcessLock
 
 from . import QuickenError
 from ._client import Client
-from ._constants import socket_name, server_state_name
+from ._constants import socket_name, server_state_name, stop_socket_name
 from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
 from ._typing import MYPY_CHECK_RUNNING
@@ -246,38 +247,36 @@ class CliServerManager:
 
     def stop_server(self):
         assert self._lock.acquired, 'stop_server must be called under lock.'
-        from psutil import NoSuchProcess, Process
-        server_state = self.server_state
-        pid = server_state['pid']
-        create_time = server_state['create_time']
-        try:
-            process = Process(pid=pid)
-        except NoSuchProcess:
-            logger.debug(
-                f'Daemon reload requested but process with pid {pid}'
-                ' does not exist.')
-            return
 
-        if process.create_time() != create_time:
-            logger.debug(
-                'Daemon reload requested but start time does not match'
-                ' expected (probably new process re-using pid), skipping.')
-            return
-
+        # We don't want to leave it to the server to remove the sockets since
+        # we do not wait for it to shut down before starting a new one.
         try:
-            # We don't want to leave it to the server to remove the socket since
-            # we do not wait for it.
             with chdir(self._runtime_dir):
                 os.unlink(socket_name)
         except FileNotFoundError:
-            # No problem, if the file was removed at some point it doesn't
-            # impact us.
+            # If any file was removed it doesn't impact us.
             pass
-        # This will cause the server to stop accepting clients and start
-        # shutting down. It will wait for any still-running processes before
-        # stopping completely, but it does not consume any other resources that
-        # we are concerned with.
-        process.terminate()
+
+        try:
+            # This will cause the server to stop accepting clients and start
+            # shutting down. It will wait for any still-running processes before
+            # stopping completely, but it does not consume any other resources
+            # that we are concerned with.
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.connect(stop_socket_name)
+        except ConnectionRefusedError:
+            # Best effort.
+            pass
+        except FileNotFoundError:
+            # No problem, server not up.
+            pass
+
+        try:
+            with chdir(self._runtime_dir):
+                os.unlink(stop_socket_name)
+        except FileNotFoundError:
+            # If any file was removed it doesn't impact us.
+            pass
 
     @property
     @contextmanager

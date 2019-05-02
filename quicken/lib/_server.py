@@ -22,6 +22,7 @@ import logging.config
 import multiprocessing
 import os
 import signal
+import socket
 import sys
 import time
 import traceback
@@ -30,11 +31,9 @@ from abc import ABC, abstractmethod
 from contextlib import ExitStack
 from pathlib import Path
 
-import psutil
-
 from .. import __version__
 from ._asyncio import DeadlineTimer
-from ._constants import socket_name, server_state_name
+from ._constants import socket_name, stop_socket_name, server_state_name
 from ._logging import ContextLogger, NullContextFilter, UTCFormatter
 from ._multiprocessing import run_in_process
 from ._multiprocessing_asyncio import (
@@ -136,7 +135,7 @@ def _run_server(
     server_idle_timeout: Optional[float],
     log_file,
     user_data,
-    done
+    done,
 ) -> None:
     """Server that provides sockets to `callback`.
 
@@ -155,7 +154,6 @@ def _run_server(
     logger.debug('_run_server()')
 
     loop = asyncio.new_event_loop()
-    loop.set_debug(True)
 
     def print_exception(_loop, context):
         exc = context['exception']
@@ -163,6 +161,7 @@ def _run_server(
             traceback.format_exception(type(exc), exc, exc.__traceback__))
         logger.error(
             'Error in event loop: %s\n%s', context['message'], formatted_exc)
+
     loop.set_exception_handler(print_exception)
 
     handler = ProcessConnectionHandler(callback, {}, loop=loop)
@@ -178,7 +177,13 @@ def _run_server(
     # socket_name is relative and we must already have cwd set to the
     # runtime_dir.
     server = Server(
-        socket_name, handler, finish_loop, server_idle_timeout, loop=loop)
+        socket_name,
+        stop_socket_name,
+        handler,
+        finish_loop,
+        server_idle_timeout,
+        loop=loop
+    )
 
     def handle_sigterm():
         logger.debug('Received SIGTERM')
@@ -193,9 +198,8 @@ def _run_server(
 
     # For server state info.
     pid = os.getpid()
-    process = psutil.Process(pid)
     server_state = {
-        'create_time': process.create_time(),
+        'create_time': time.time(),
         'version': __version__,
         'pid': pid,
         'user_data': user_data,
@@ -206,7 +210,7 @@ def _run_server(
         json.dumps(server_state), encoding='utf-8')
 
     logger.debug('Starting server')
-    loop.create_task(server.serve())
+    server.serve()
 
     loop.run_forever()
     logger.debug('Server finished.')
@@ -389,21 +393,30 @@ class Server:
     Not thread-safe.
     """
     def __init__(
-            self, socket_path, handler: ConnectionHandler,
-            on_shutdown: NoneFunction, idle_timeout: Optional[int] = None,
-            shutdown_ctx=None, loop=None):
+        self,
+        socket_path,
+        stop_socket_path,
+        handler: ConnectionHandler,
+        on_shutdown: NoneFunction,
+        idle_timeout: Optional[int] = None,
+        shutdown_ctx=None,
+        loop=None
+    ):
         """
         Args:
-            socket_path:
+            socket_path: path to listen for client connections
+            stop_socket_path: path to a socket which, when a client connects,
+                will cause the server to shut down
             handler: Handler for received connections
-            idle_timeout:
+            idle_timeout: timeout (in seconds) after which server will shut itself down
+                without any work
             shutdown_ctx: Context manager to be entered prior to server shutdown.
-            loop:
+            loop
         """
         if not loop:
             loop = asyncio.get_event_loop()
         self._loop = loop
-
+        self._stop_socket_path = stop_socket_path
         self._listener = AsyncListener(socket_path, loop=self._loop)
         self._handler = handler
         self._idle_timeout = idle_timeout
@@ -414,19 +427,9 @@ class Server:
         self._shutdown_accept_cv = asyncio.Condition(loop=self._loop)
         self._on_shutdown = on_shutdown
 
-    async def serve(self):
-        while True:
-            try:
-                connection = await self._listener.accept()
-            except ListenerStopped:
-                if not self._shutting_down:
-                    logger.error('Listener has stopped')
-                else:
-                    async with self._shutdown_accept_cv:
-                        self._shutdown_accept_cv.notify()
-                return
-
-            self._handle_connection(connection)
+    def serve(self):
+        self._loop.create_task(self._serve_stop())
+        self._loop.create_task(self._serve_clients())
 
     async def stop(self):
         """Gracefully stop server, processing all pending connections.
@@ -455,6 +458,32 @@ class Server:
             logger.debug('Waiting for shutdown callback')
             # Finish everything off.
             self._on_shutdown()
+
+    async def _serve_stop(self):
+        sock = self._stop_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(self._stop_socket_path)
+        sock.setblocking(False)
+        self._loop.add_reader(sock.fileno(), self._on_stop_connect)
+
+    def _on_stop_connect(self):
+        self._loop.remove_reader(self._stop_sock.fileno())
+        _sock, _address = self._stop_sock.accept()
+        # XXX: Should we close the socket?
+        self._loop.create_task(self.stop())
+
+    async def _serve_clients(self):
+        while True:
+            try:
+                connection = await self._listener.accept()
+            except ListenerStopped:
+                if not self._shutting_down:
+                    logger.error('Listener has stopped')
+                else:
+                    async with self._shutdown_accept_cv:
+                        self._shutdown_accept_cv.notify()
+                return
+
+            self._handle_connection(connection)
 
     def _handle_connection(self, connection: AsyncConnectionAdapter):
         self._idle_handle_connect()
