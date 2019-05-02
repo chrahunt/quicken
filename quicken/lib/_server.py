@@ -11,6 +11,8 @@ client -> server
 To allow use of any callable in the server we override the forkserver
 implementation and do not
 """
+from __future__ import annotations
+
 import asyncio
 import contextvars
 import functools
@@ -27,11 +29,10 @@ import traceback
 from abc import ABC, abstractmethod
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any, Dict, Optional
 
 import psutil
 
-from . import __version__
+from .. import __version__
 from ._asyncio import DeadlineTimer
 from ._constants import socket_name, server_state_name
 from ._logging import ContextLogger, NullContextFilter, UTCFormatter
@@ -43,10 +44,15 @@ from ._multiprocessing_asyncio import (
     ConnectionClose,
     ListenerStopped
 )
-from ._typing import NoneFunction
+from ._typing import MYPY_CHECK_RUNNING
 from ._protocol import ProcessState, Request, RequestTypes, Response, ServerState
 from ._signal import settable_signals
 from ._xdg import RuntimeDir
+
+if MYPY_CHECK_RUNNING:
+    from typing import Any, Dict, Optional
+
+    from ._types import NoneFunction
 
 
 logger = ContextLogger(logging.getLogger(__name__), prefix='server_')

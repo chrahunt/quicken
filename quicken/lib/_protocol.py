@@ -8,10 +8,13 @@ import sys
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
 
 # Registers TextIOWrapper handler.
 from . import _multiprocessing
+from ._typing import MYPY_CHECK_RUNNING
+
+if MYPY_CHECK_RUNNING:
+    from typing import Any, Dict, List
 
 
 class RequestTypes:

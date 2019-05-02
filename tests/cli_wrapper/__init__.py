@@ -35,7 +35,7 @@ def test_something():
 """
 from pathlib import Path
 
-from quicken import quicken
+from quicken.lib import quicken
 
 from ..utils.pytest import current_test_name
 from ..utils import preserved_signals

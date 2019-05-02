@@ -1,5 +1,8 @@
 """Signal helpers.
 """
+from __future__ import annotations
+
+
 import errno
 import logging
 import os
@@ -7,7 +10,11 @@ import signal
 import sys
 
 from contextlib import contextmanager
-from typing import Set
+
+from ._typing import MYPY_CHECK_RUNNING
+
+if MYPY_CHECK_RUNNING:
+    from typing import Set
 
 
 logger = logging.getLogger(__name__)

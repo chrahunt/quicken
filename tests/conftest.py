@@ -27,13 +27,13 @@ except ImportError:
 from .utils.pytest import current_test_name
 from .utils.process import active_children, disable_child_tracking, kill_children
 
-from quicken._logging import UTCFormatter
+from quicken.lib._logging import UTCFormatter
 
 
 log_file_format = 'logs/{test_case}.log'
 
 
-pytest_plugins = "tests.timeout", "tests.strace"
+pytest_plugins = "tests.plugins.timeout", "tests.plugins.strace"
 
 
 def pytest_runtest_setup(item):

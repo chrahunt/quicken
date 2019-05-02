@@ -1,15 +1,18 @@
 """User-facing decorator.
 """
+from __future__ import annotations
+
 import sys
 
 from functools import wraps
-from typing import Callable, Optional
 
-from ._typing import JSONType
+from ._typing import MYPY_CHECK_RUNNING
+from .._timings import report
 
+if MYPY_CHECK_RUNNING:
+    from typing import Callable, Optional
 
-MainFunction = Callable[[], Optional[int]]
-MainProvider = Callable[[], MainFunction]
+    from ._types import JSONType, MainFunction, MainProvider
 
 
 def quicken(
@@ -65,7 +68,9 @@ def quicken(
                 return main_provider()()
 
             # Lazy import to avoid overhead.
-            from ._cli import _server_runner_wrapper
+            report('load quicken library')
+            from ._lib import _server_runner_wrapper
+            report('end load quicken library')
             return _server_runner_wrapper(
                 name,
                 main_provider,

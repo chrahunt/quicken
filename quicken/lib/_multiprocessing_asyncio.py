@@ -10,7 +10,11 @@ import signal
 import socket
 
 from contextlib import contextmanager
-from typing import Any
+
+from ._typing import MYPY_CHECK_RUNNING
+
+if MYPY_CHECK_RUNNING:
+    from typing import Any
 
 
 logger = logging.getLogger(__name__)

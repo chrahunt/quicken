@@ -8,6 +8,7 @@ certifi==2019.3.9
 ch==0.1.2
 chardet==3.0.4
 coverage==4.5.3
+demandimport==0.3.4
 docutils==0.14
 fasteners==0.14.1
 idna==2.8

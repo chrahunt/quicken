@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 import multiprocessing.connection
 
-from ._protocol import Request, Response
+from ._typing import MYPY_CHECK_RUNNING
+
+if MYPY_CHECK_RUNNING:
+    from ._protocol import Request, Response
 
 
 class Client:

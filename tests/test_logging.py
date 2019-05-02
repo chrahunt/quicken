@@ -1,7 +1,7 @@
 import io
 import logging
 
-from quicken._protocol import ProcessState
+from quicken.lib._protocol import ProcessState
 
 from .utils.pytest import non_windows
 

@@ -1,0 +1,1 @@
+MYPY_CHECK_RUNNING = False

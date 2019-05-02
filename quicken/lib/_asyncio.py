@@ -1,6 +1,12 @@
 """Asyncio utility classes.
 """
-import asyncio
+from __future__ import annotations
+
+from ._typing import MYPY_CHECK_RUNNING
+
+
+if MYPY_CHECK_RUNNING:
+    import asyncio
 
 
 class DeadlineTimer:

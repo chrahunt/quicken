@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import ContextManager, List
 
-from quicken._signal import settable_signals
+from quicken.lib._signal import settable_signals
 
 
 logger = logging.getLogger(__name__)

@@ -15,17 +15,19 @@ from unittest.mock import Mock, patch
 import psutil
 import pytest
 
-from quicken import __version__, QuickenError
-from quicken._constants import server_state_name, socket_name
-from quicken._signal import forwarded_signals
-from quicken._xdg import RuntimeDir
+from quicken import __version__
+from quicken.lib import QuickenError
+from quicken.lib._constants import server_state_name, socket_name
+from quicken.lib._signal import forwarded_signals
+from quicken.lib._xdg import RuntimeDir
 
 from . import cli_factory
 from ..utils import (
     argv, captured_std_streams, env, isolated_filesystem, umask)
+from ..utils.path import get_bound_path
 from ..utils.process import contained_children
 from ..utils.pytest import current_test_name, non_windows
-from ..watch import wait_for_create
+from ..utils.watch import wait_for_create
 
 
 pytestmark = non_windows
@@ -336,7 +338,7 @@ def test_client_receiving_tstp_ttin_stops_itself():
             p = Process(target=client)
             p.start()
             assert wait_for_create(
-                runtime_dir.path(runner_pid_file.name), timeout=2), \
+                get_bound_path(runtime_dir, runner_pid_file.name), timeout=2), \
                 f'{runner_pid_file} must have been created'
             runner_pid = int(runner_pid_file.read_text(encoding='utf-8'))
 
@@ -407,7 +409,7 @@ def test_killed_client_causes_handler_to_exit():
 
             logger.debug('Waiting for pid file')
             assert wait_for_create(
-                runtime_dir.path(runner_pid_file.name), timeout=2), \
+                get_bound_path(runtime_dir, runner_pid_file.name), timeout=2), \
                 f'{runner_pid_file} must have been created'
             runner_pid = int(runner_pid_file.read_text(encoding='utf-8'))
             logger.debug('Runner started with pid: %d', runner_pid)
@@ -702,7 +704,7 @@ def test_server_reload_ok_when_stale_pidfile_exists():
             worker_pid = str(p.pid)
             runtime_dir = RuntimeDir(dir_path=path)
             process = psutil.Process(pid=p.pid)
-            state_file = runtime_dir.path(server_state_name)
+            state_file = get_bound_path(runtime_dir, server_state_name)
             state_file.write_text(json.dumps({
                 'create_time': process.create_time(),
                 'pid': p.pid,

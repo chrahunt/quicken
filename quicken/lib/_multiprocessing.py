@@ -1,11 +1,21 @@
-import multiprocessing
+from __future__ import annotations
+
+from ._import import patch_modules
+
+with patch_modules('tempfile'):
+    import multiprocessing
+
 import os
 import sys
 
 from io import TextIOWrapper
 from multiprocessing.connection import wait
 from multiprocessing.reduction import register
-from typing import TextIO
+
+from ._typing import MYPY_CHECK_RUNNING
+
+if MYPY_CHECK_RUNNING:
+    from typing import TextIO
 
 
 try:

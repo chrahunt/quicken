@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from ..utils.pytest import current_test_name
+from ...utils.pytest import current_test_name
 
 
 logger = logging.getLogger(__name__)
