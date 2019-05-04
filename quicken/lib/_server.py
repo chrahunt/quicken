@@ -11,7 +11,8 @@ client -> server
 To allow use of any callable in the server we override the forkserver
 implementation and do not
 """
-import asyncio
+from __future__ import annotations
+
 import contextvars
 import functools
 import json
@@ -20,20 +21,18 @@ import logging.config
 import multiprocessing
 import os
 import signal
+import socket
 import sys
 import time
 import traceback
 
 from abc import ABC, abstractmethod
 from contextlib import ExitStack
-from pathlib import Path
-from typing import Any, Dict, Optional
 
-import psutil
-
-from . import __version__
+from .. import __version__
 from ._asyncio import DeadlineTimer
-from ._constants import socket_name, server_state_name
+from ._constants import socket_name, stop_socket_name, server_state_name
+from ._imports import asyncio
 from ._logging import ContextLogger, NullContextFilter, UTCFormatter
 from ._multiprocessing import run_in_process
 from ._multiprocessing_asyncio import (
@@ -43,10 +42,15 @@ from ._multiprocessing_asyncio import (
     ConnectionClose,
     ListenerStopped
 )
-from ._typing import NoneFunction
-from ._protocol import ProcessState, Request, RequestTypes, Response, ServerState
+from ._typing import MYPY_CHECK_RUNNING
+from ._protocol import ProcessState, Request, RequestTypes, Response
 from ._signal import settable_signals
 from ._xdg import RuntimeDir
+
+if MYPY_CHECK_RUNNING:
+    from typing import Any, Dict, Optional
+
+    from ._types import NoneFunction
 
 
 logger = ContextLogger(logging.getLogger(__name__), prefix='server_')
@@ -56,7 +60,7 @@ def run(
     socket_handler,
     runtime_dir: RuntimeDir,
     server_idle_timeout: Optional[float],
-    log_file: Optional[Path],
+    log_file: Optional[str],
     user_data: Optional[Any],
 ):
     """Start the server in the background.
@@ -130,7 +134,7 @@ def _run_server(
     server_idle_timeout: Optional[float],
     log_file,
     user_data,
-    done
+    done,
 ) -> None:
     """Server that provides sockets to `callback`.
 
@@ -149,7 +153,6 @@ def _run_server(
     logger.debug('_run_server()')
 
     loop = asyncio.new_event_loop()
-    loop.set_debug(True)
 
     def print_exception(_loop, context):
         exc = context['exception']
@@ -157,6 +160,7 @@ def _run_server(
             traceback.format_exception(type(exc), exc, exc.__traceback__))
         logger.error(
             'Error in event loop: %s\n%s', context['message'], formatted_exc)
+
     loop.set_exception_handler(print_exception)
 
     handler = ProcessConnectionHandler(callback, {}, loop=loop)
@@ -172,7 +176,13 @@ def _run_server(
     # socket_name is relative and we must already have cwd set to the
     # runtime_dir.
     server = Server(
-        socket_name, handler, finish_loop, server_idle_timeout, loop=loop)
+        socket_name,
+        stop_socket_name,
+        handler,
+        finish_loop,
+        server_idle_timeout,
+        loop=loop
+    )
 
     def handle_sigterm():
         logger.debug('Received SIGTERM')
@@ -187,20 +197,20 @@ def _run_server(
 
     # For server state info.
     pid = os.getpid()
-    process = psutil.Process(pid)
     server_state = {
-        'create_time': process.create_time(),
+        'create_time': time.time(),
         'version': __version__,
         'pid': pid,
         'user_data': user_data,
         'groups': os.getgroups(),
         'gid': os.getgid(),
     }
-    Path(server_state_name).write_text(
-        json.dumps(server_state), encoding='utf-8')
+
+    with open(server_state_name, 'w', encoding='utf-8') as f:
+        json.dump(server_state, f)
 
     logger.debug('Starting server')
-    loop.create_task(server.serve())
+    server.serve()
 
     loop.run_forever()
     logger.debug('Server finished.')
@@ -270,12 +280,8 @@ class ProcessConnectionHandler(ConnectionHandler):
             nonlocal process, process_task
             logger.debug('Waiting for request')
             request = await queue.get()
-            if request.name == RequestTypes.get_server_state:
-                state = ServerState(self._start_time, self._pid, self._context)
-                logger.debug('Sending server state')
-                await connection.send(Response(state))
 
-            elif request.name == RequestTypes.run_process:
+            if request.name == RequestTypes.run_process:
                 assert process is None, \
                     'Process must not have been started'
                 process_state = request.contents
@@ -383,21 +389,30 @@ class Server:
     Not thread-safe.
     """
     def __init__(
-            self, socket_path, handler: ConnectionHandler,
-            on_shutdown: NoneFunction, idle_timeout: Optional[int] = None,
-            shutdown_ctx=None, loop=None):
+        self,
+        socket_path,
+        stop_socket_path,
+        handler: ConnectionHandler,
+        on_shutdown: NoneFunction,
+        idle_timeout: Optional[int] = None,
+        shutdown_ctx=None,
+        loop=None
+    ):
         """
         Args:
-            socket_path:
+            socket_path: path to listen for client connections
+            stop_socket_path: path to a socket which, when a client connects,
+                will cause the server to shut down
             handler: Handler for received connections
-            idle_timeout:
+            idle_timeout: timeout (in seconds) after which server will shut itself down
+                without any work
             shutdown_ctx: Context manager to be entered prior to server shutdown.
-            loop:
+            loop
         """
         if not loop:
             loop = asyncio.get_event_loop()
         self._loop = loop
-
+        self._stop_socket_path = stop_socket_path
         self._listener = AsyncListener(socket_path, loop=self._loop)
         self._handler = handler
         self._idle_timeout = idle_timeout
@@ -408,19 +423,9 @@ class Server:
         self._shutdown_accept_cv = asyncio.Condition(loop=self._loop)
         self._on_shutdown = on_shutdown
 
-    async def serve(self):
-        while True:
-            try:
-                connection = await self._listener.accept()
-            except ListenerStopped:
-                if not self._shutting_down:
-                    logger.error('Listener has stopped')
-                else:
-                    async with self._shutdown_accept_cv:
-                        self._shutdown_accept_cv.notify()
-                return
-
-            self._handle_connection(connection)
+    def serve(self):
+        self._loop.create_task(self._serve_stop())
+        self._loop.create_task(self._serve_clients())
 
     async def stop(self):
         """Gracefully stop server, processing all pending connections.
@@ -449,6 +454,33 @@ class Server:
             logger.debug('Waiting for shutdown callback')
             # Finish everything off.
             self._on_shutdown()
+
+    async def _serve_stop(self):
+        sock = self._stop_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(self._stop_socket_path)
+        sock.listen(1)
+        sock.setblocking(False)
+        self._loop.add_reader(sock.fileno(), self._on_stop_connect)
+
+    def _on_stop_connect(self):
+        self._loop.remove_reader(self._stop_sock.fileno())
+        _sock, _address = self._stop_sock.accept()
+        # XXX: Should we close the socket?
+        self._loop.create_task(self.stop())
+
+    async def _serve_clients(self):
+        while True:
+            try:
+                connection = await self._listener.accept()
+            except ListenerStopped:
+                if not self._shutting_down:
+                    logger.error('Listener has stopped')
+                else:
+                    async with self._shutdown_accept_cv:
+                        self._shutdown_accept_cv.notify()
+                return
+
+            self._handle_connection(connection)
 
     def _handle_connection(self, connection: AsyncConnectionAdapter):
         self._idle_handle_connect()
@@ -492,8 +524,9 @@ class Server:
             self._set_idle_timer()
 
 
-def _configure_logging(logfile: Path, loglevel: str) -> None:
-    logfile.parent.mkdir(parents=True, exist_ok=True)
+def _configure_logging(logfile: str, loglevel: str) -> None:
+    parent = os.path.dirname(logfile)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
     # TODO: Make fully configurable.
     logging.config.dictConfig({
         'version': 1,

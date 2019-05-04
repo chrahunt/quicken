@@ -6,7 +6,7 @@ import sys
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from quicken._xdg import BoundPath, chdir
+from .path import BoundPath, chdir
 
 
 logger = logging.getLogger(__name__)

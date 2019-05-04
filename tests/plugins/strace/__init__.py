@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from ..utils.pytest import current_test_name
+from ...utils.pytest import current_test_name
 
 
 logger = logging.getLogger(__name__)
@@ -48,12 +48,12 @@ def pytest_runtest_call(item):
         yield
         return
 
-    path = Path(__file__).parent.parent.parent / 'logs' / f'strace.{current_test_name()}.log'
+    path = Path(__file__).parent / '..' / '..' / '..' / 'logs' / f'strace.{current_test_name()}.log'
     p = subprocess.Popen(
         ['strace', '-yttfo', str(path), '-s', '512', '-p', str(os.getpid())],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        stderr=subprocess.DEVNULL,
     )
     if not busy_wait(is_traced, timeout=5):
         logger.warning('Could not attach strace')

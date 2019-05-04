@@ -14,3 +14,7 @@ def cli():
     print('cli()')
     print('cli2()')
     logger.info('cli()')
+
+
+if __name__ == '__main__':
+    cli()

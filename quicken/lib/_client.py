@@ -1,6 +1,10 @@
-import multiprocessing.connection
+from __future__ import annotations
 
-from ._protocol import Request, Response
+from ._imports import multiprocessing_connection
+from ._typing import MYPY_CHECK_RUNNING
+
+if MYPY_CHECK_RUNNING:
+    from ._protocol import Request, Response
 
 
 class Client:
@@ -8,7 +12,7 @@ class Client:
     multiprocessing.connection.Client.
     """
     def __init__(self, *args, **kwargs):
-        self._client = multiprocessing.connection.Client(*args, **kwargs)
+        self._client = multiprocessing_connection.Client(*args, **kwargs)
 
     def send(self, request: Request) -> Response:
         self._client.send(request)

@@ -1,10 +1,14 @@
-from contextlib import contextmanager, ExitStack
-from functools import wraps
+from __future__ import annotations
+
 import os
-from pathlib import Path, PosixPath
 import stat
-import threading
-from typing import Any, ContextManager, Union
+
+from contextlib import contextmanager
+
+from ._typing import MYPY_CHECK_RUNNING
+
+if MYPY_CHECK_RUNNING:
+    from typing import ContextManager
 
 
 @contextmanager
@@ -23,50 +27,6 @@ def chdir(fd) -> ContextManager:
     finally:
         os.fchdir(cwd)
         os.close(cwd)
-
-
-@contextmanager
-def lock_guard(l: Union[threading.Lock, threading.RLock]):
-    l.acquire()
-    try:
-        yield
-    finally:
-        l.release()
-
-
-class BoundPath(PosixPath):
-    _lock = threading.RLock()
-
-    def __init__(self, *_, dir_fd: int):
-        self._dir_fd = dir_fd
-        super().__init__()
-
-    def __getattribute__(self, name: str) -> Any:
-        """Intercept and execute all functions in the context of the
-        directory.
-        """
-        attr = super().__getattribute__(name)
-        if callable(attr):
-            @wraps(attr)
-            def wrapper(*args, **kwargs):
-                with ExitStack() as stack:
-                    stack.enter_context(lock_guard(self._lock))
-                    try:
-                        stack.enter_context(chdir(self._dir_fd))
-                    except AttributeError:
-                        # Avoids issues during Path construction, before
-                        # __init__ is called.
-                        pass
-                    return attr(*args, **kwargs)
-            return wrapper
-        return attr
-
-    @property
-    def dir(self):
-        return self._dir_fd
-
-    def pass_to(self, callback):
-        return callback(self)
 
 
 class RuntimeDir:
@@ -108,7 +68,7 @@ class RuntimeDir:
         try:
             self._fd = os.open(dir_path, os.O_RDONLY)
         except FileNotFoundError:
-            Path(dir_path).mkdir(mode=0o700)
+            os.mkdir(dir_path, mode=0o700)
             self._fd = os.open(dir_path, os.O_RDONLY)
         # Test after open to avoid toctou, also since we do not trust the mode
         # passed to mkdir.
@@ -128,15 +88,6 @@ class RuntimeDir:
     def fileno(self) -> int:
         return self._fd
 
-    def path(self, *args) -> BoundPath:
-        """Execute action in directory so relative paths are resolved inside the
-        directory without specific operations needing to support `dir_fd`.
-        """
-        result = BoundPath(*args, dir_fd=self._fd)
-        if result.is_absolute():
-            raise ValueError('Provided argument must not be absolute')
-        return result
-
     def __str__(self):
         return self._path
 
@@ -155,6 +106,6 @@ def runtime_dir(base_name):
 
 def cache_dir(base_name):
     try:
-        return Path(os.environ['XDG_CACHE_HOME']) / base_name
+        return os.path.join(os.environ['XDG_CACHE_HOME'], base_name)
     except KeyError:
-        return Path(os.environ['HOME']) / '.cache' / base_name
+        return os.path.join(os.environ['HOME'], '.cache', base_name)

@@ -1,5 +1,8 @@
 """Signal helpers.
 """
+from __future__ import annotations
+
+
 import errno
 import logging
 import os
@@ -7,7 +10,11 @@ import signal
 import sys
 
 from contextlib import contextmanager
-from typing import Set
+
+from ._typing import MYPY_CHECK_RUNNING
+
+if MYPY_CHECK_RUNNING:
+    from typing import Set
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +39,6 @@ def _settable_signal(sig) -> bool:
 
 
 signal_range = set(range(1, signal.NSIG))
-# XXX: Can be signal.valid_signals() in 3.8+
 settable_signals = set(filter(_settable_signal, signal_range))
 
 if not sys.platform.startswith('win'):

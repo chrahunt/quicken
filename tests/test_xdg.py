@@ -3,11 +3,12 @@ import tempfile
 
 from pathlib import Path
 
-from quicken._xdg import RuntimeDir
+from quicken.lib._xdg import RuntimeDir
 
 import pytest
 
 from .utils import env
+from .utils.path import get_bound_path
 from .utils.pytest import non_windows
 
 
@@ -77,7 +78,7 @@ def test_runtime_dir_succeeds_creating_a_file():
     sample_text = 'hello'
     with tempfile.TemporaryDirectory() as p:
         runtime_dir = RuntimeDir(dir_path=p)
-        file = runtime_dir.path('example')
+        file = get_bound_path(runtime_dir, 'example')
         file.write_text(sample_text, encoding='utf-8')
         text = (Path(p) / 'example').read_text(encoding='utf-8')
         assert sample_text == text
@@ -92,7 +93,7 @@ def test_runtime_dir_path_fails_when_directory_unlinked_and_recreated():
     sample_text = 'hello'
     with tempfile.TemporaryDirectory() as p:
         runtime_dir = RuntimeDir(dir_path=p)
-        file = runtime_dir.path('example')
+        file = get_bound_path(runtime_dir, 'example')
 
     Path(p).mkdir()
 

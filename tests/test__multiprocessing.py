@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from quicken._multiprocessing import run_in_process
+from quicken.lib._multiprocessing import run_in_process
 
 from .utils import isolated_filesystem
 from .utils.process import contained_children

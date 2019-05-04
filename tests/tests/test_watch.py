@@ -3,11 +3,12 @@ import os
 import threading
 import time
 
-from quicken._xdg import RuntimeDir
+from quicken.lib._xdg import RuntimeDir
 
-from .utils import isolated_filesystem
-from .utils.pytest import non_windows
-from .watch import wait_for_create, wait_for_delete
+from ..utils import isolated_filesystem
+from ..utils.pytest import non_windows
+from ..utils.watch import wait_for_create, wait_for_delete
+from ..utils.path import get_bound_path
 
 
 pytestmark = non_windows
@@ -16,7 +17,7 @@ pytestmark = non_windows
 def test_wait_for_create_notices_existing_file():
     with isolated_filesystem() as p:
         runtime_dir = RuntimeDir(dir_path=p)
-        file = runtime_dir.path('example.txt')
+        file = get_bound_path(runtime_dir, 'example.txt')
         file.write_text('hello', encoding='utf-8')
         assert wait_for_create(file, timeout=0.01)
 
@@ -24,7 +25,7 @@ def test_wait_for_create_notices_existing_file():
 def test_wait_for_create_fails_missing_file():
     with isolated_filesystem() as p:
         runtime_dir = RuntimeDir(dir_path=p)
-        file = runtime_dir.path('example.txt')
+        file = get_bound_path(runtime_dir, 'example.txt')
         assert not wait_for_create(file, timeout=0.01)
 
 
@@ -33,7 +34,7 @@ def test_watch_for_create_notices_file_fast():
         # To rule out dependence on being in the cwd.
         os.chdir('/')
         runtime_dir = RuntimeDir(dir_path=p)
-        file = runtime_dir.path('example.txt')
+        file = get_bound_path(runtime_dir, 'example.txt')
         writer_timestamp: datetime = None
 
         def create_file():
@@ -53,14 +54,14 @@ def test_watch_for_create_notices_file_fast():
 def test_wait_for_delete_notices_missing_file():
     with isolated_filesystem() as p:
         runtime_dir = RuntimeDir(dir_path=p)
-        file = runtime_dir.path('example.txt')
+        file = get_bound_path(runtime_dir, 'example.txt')
         assert wait_for_delete(file, timeout=0.01)
 
 
 def test_wait_for_delete_fails_existing_file():
     with isolated_filesystem() as p:
         runtime_dir = RuntimeDir(dir_path=p)
-        file = runtime_dir.path('example.txt')
+        file = get_bound_path(runtime_dir, 'example.txt')
         file.write_text('hello', encoding='utf-8')
         assert not wait_for_delete(file, timeout=0.1)
 
@@ -70,7 +71,7 @@ def test_watch_for_delete_notices_file_fast():
         # To rule out dependence on being in the cwd.
         os.chdir('/')
         runtime_dir = RuntimeDir(dir_path=p)
-        file = runtime_dir.path('example.txt')
+        file = get_bound_path(runtime_dir, 'example.txt')
         file.write_text('hello', encoding='utf-8')
         writer_timestamp: datetime = None
 

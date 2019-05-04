@@ -2,7 +2,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import multiprocessing
 import os
@@ -10,7 +9,12 @@ import signal
 import socket
 
 from contextlib import contextmanager
-from typing import Any
+
+from ._imports import asyncio
+from ._typing import MYPY_CHECK_RUNNING
+
+if MYPY_CHECK_RUNNING:
+    from typing import Any
 
 
 logger = logging.getLogger(__name__)
