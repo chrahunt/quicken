@@ -20,6 +20,7 @@ from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
 from ._typing import MYPY_CHECK_RUNNING
 from ._xdg import cache_dir, chdir, RuntimeDir
+from .. import set_importing
 from .._timings import report
 
 if MYPY_CHECK_RUNNING:
@@ -121,7 +122,9 @@ def server_runner_wrapper(
         if need_start:
             logger.info('Starting server')
             # XXX: Should have logging around this, for timing.
+            set_importing(True)
             main = main_provider()
+            set_importing(False)
             manager.start_server(main, log_file, server_idle_timeout, user_data)
             client = manager.connect()
 

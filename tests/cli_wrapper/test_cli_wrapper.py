@@ -73,6 +73,23 @@ def test_function_is_run_using_server():
             assert runner_pid_1 != runner_pid_2
 
 
+def test_quicken_is_importing_is_set():
+    import quicken
+
+    @cli_factory(current_test_name())
+    def runner():
+        assert quicken.is_importing
+        def inner():
+            assert not quicken.is_importing
+            return 0
+        return inner
+
+    assert not quicken.is_importing
+
+    with contained_children():
+        assert runner() == 0
+
+
 # This may time out if not all references to the std streams are closed in
 # the server.
 @pytest.mark.timeout(5)
