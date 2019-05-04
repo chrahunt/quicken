@@ -21,6 +21,8 @@ def patch_modules(modules=None, packages=None):
 
     current_modules = set(sys.modules.keys())
     for name in modules:
+        # XXX: May want to enable for unit tests.
+        #assert name not in current_modules
         if name not in current_modules:
             sys.modules[name] = ModuleType(name)
 

@@ -16,24 +16,39 @@ it into two parts:
 
 MainProvider: Splitting the code and executing the code matched to part 1
 Main: part 2
+
+For the invoked code we try to align with the equivalent Python behavior, where
+it makes sense:
+
+1. For files:
+   1. Python sets __file__ to the path as provided to the Python interpreter,
+      but since initial import occurs in a directory that may be different than
+      the runtime execution directory, we normalize __file__ to be an absolute
+      path - any usages of __file__ within methods would then be correct.
+   2. Python sets sys.argv[0] to the path as provided to the Python interpreter,
+      this behavior is OK since if relative it will be relative to cwd which will
+      be set by the time the if __name__ == '__main__' block is called.
+1. For modules:
+   1. Python sets __file__ to the absolute path of the file, we should do the same.
+   2. Python sets sys.argv[0] to the absolute path of the file, we should do the same.
 """
 from __future__ import annotations
 
-#import demandimport
-#demandimport.ignore('_bootlocale')
-#demandimport.ignore('_compat_pickle')
-#demandimport.ignore('asyncio.base_tasks')
-#demandimport.enable()
 from ._timings import report
 report('start cli load')
 
 import argparse
 import ast
-import hashlib
-import importlib
+import importlib.util
 import os
 import stat
 import sys
+
+try:
+    # Faster to import than hashlib if _sha512 is present. See e.g. python/cpython#12742
+    from _sha512 import sha512 as _sha512
+except ImportError:
+    from hashlib import sha512 as _sha512
 
 from functools import partial
 
@@ -47,16 +62,29 @@ if MYPY_CHECK_RUNNING:
 
 report('end cli load dependencies')
 
+
 def run(name, metadata, callback):
     report('start quicken load')
     from .lib import quicken
     report('end quicken load')
+
     def reload(old_data, new_data):
         return old_data != new_data
-    return quicken(name, reload_server=reload, user_data=metadata)(callback)()
+
+    log_file = os.environ.get('QUICKEN_LOG')
+
+    decorator = quicken(
+        name, reload_server=reload, log_file=log_file, user_data=metadata
+    )
+
+    return decorator(callback)()
 
 
 def is_main(node):
+    """Whether a node represents:
+    if __name__ == '__main__':
+    if '__main__' == __name__:
+    """
     if not isinstance(node, ast.If):
         return False
 
@@ -110,13 +138,13 @@ def parse_file(path: str):
 
     Returns annotated code objects as expected.
     """
+    path = os.path.abspath(path)
     with open(path, 'rb') as f:
         text = f.read()
 
     root = ast.parse(text, filename=path)
     for i, node in enumerate(root.body):
         if is_main(node):
-            split = i
             break
     else:
         raise RuntimeError('Must have if __name__ == "__main__":')
@@ -139,49 +167,32 @@ def parse_file(path: str):
     return prelude_func, main_func
 
 
-def handle_code(text: str) -> int:
-    """
-    Given some python text, get the imports and outputs, then treat the function
-    as a module.
-    Args:
-        text:
-
-    Returns:
-    """
-    digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
-
-    def importer():
-        root = ast.parse(text)
-        imports = extract_imports(root)
-        for name in imports:
-            importlib.import_module(name)
-
-        def inner():
-            pass
-
-        return inner
-
-    name = f'quicken.code.{digest}'
-    return run(name, {}, importer)
-
-
 class PathHandler:
-    def __init__(self, path):
+    def __init__(self, path, args):
         report('start handle_path()')
-        if not os.path.exists(path):
-            print(f'{path} does not exist')
+        self._path_arg = path
+
         path = os.path.abspath(path)
-        real_path = os.path.realpath(path)
-        digest = hashlib.sha256(path.encode('utf-8')).hexdigest()
-        stat_result = os.stat(real_path)
         self._path = path
+
+        self._args = args
+
+        real_path = os.path.realpath(path)
+        digest = _sha512(path.encode('utf-8')).hexdigest()
         self._name = f'quicken.file.{digest}'
+
+        stat_result = os.stat(real_path)
+
         self._metadata = {
             'path': path,
             'real_path': real_path,
             'ctime': stat_result[stat.ST_CTIME],
             'mtime': stat_result[stat.ST_MTIME],
         }
+
+    @property
+    def argv(self):
+        return [self._path_arg, *self._args]
 
     @property
     def name(self):
@@ -201,50 +212,97 @@ class PathHandler:
         return main_code
 
 
-def handle_module(text: str) -> int:
+# Adapted from https://github.com/python/cpython/blob/e42b705188271da108de42b55d9344642170aa2b/Lib/runpy.py#L101
+# with changes:
+# * we do not actually want to retrieve the module code yet
+def _get_module_details(mod_name, error=ImportError):
+    if mod_name.startswith("."):
+        raise error("Relative module names not supported")
+    pkg_name, _, _ = mod_name.rpartition(".")
+    if pkg_name:
+        # Try importing the parent to avoid catching initialization errors
+        try:
+            __import__(pkg_name)
+        except ImportError as e:
+            # If the parent or higher ancestor package is missing, let the
+            # error be raised by find_spec() below and then be caught. But do
+            # not allow other errors to be caught.
+            if e.name is None or (e.name != pkg_name and
+                    not pkg_name.startswith(e.name + ".")):
+                raise
+        # Warn if the module has already been imported under its normal name
+        existing = sys.modules.get(mod_name)
+        if existing is not None and not hasattr(existing, "__path__"):
+            from warnings import warn
+            msg = "{mod_name!r} found in sys.modules after import of " \
+                "package {pkg_name!r}, but prior to execution of " \
+                "{mod_name!r}; this may result in unpredictable " \
+                "behaviour".format(mod_name=mod_name, pkg_name=pkg_name)
+            warn(RuntimeWarning(msg))
+
+    try:
+        spec = importlib.util.find_spec(mod_name)
+    except (ImportError, AttributeError, TypeError, ValueError) as ex:
+        # This hack fixes an impedance mismatch between pkgutil and
+        # importlib, where the latter raises other errors for cases where
+        # pkgutil previously raised ImportError
+        msg = "Error while finding module specification for {!r} ({}: {})"
+        raise error(msg.format(mod_name, type(ex).__name__, ex)) from ex
+    if spec is None:
+        raise error("No module named %s" % mod_name)
+    if spec.submodule_search_locations is not None:
+        if mod_name == "__main__" or mod_name.endswith(".__main__"):
+            raise error("Cannot use package as __main__ module")
+        try:
+            pkg_main_name = mod_name + ".__main__"
+            return _get_module_details(pkg_main_name, error)
+        except error as e:
+            if mod_name not in sys.modules:
+                raise  # No module loaded; being a package is irrelevant
+            raise error(("%s; %r is a package and cannot " +
+                               "be directly executed") %(e, mod_name))
+    loader = spec.loader
+    if loader is None:
+        raise error("%r is a namespace package and cannot be executed"
+                                                                 % mod_name)
+    return mod_name, spec
+
+
+class ModuleHandler:
     """
     For modules it can go several ways:
     1. top-level module which does have if __name__ == "__main__" (pytest)
     2. __main__ module which does have if __name__ == "__main__" (pip)
     3. __main__ module which does not have if __name__ == "__main__" (flit)
-    4. __main__ module  which does have if __name__ == "__main__" but does imports
-       underneath it (poetry) - ouch
+    4. __main__ module which does have if __name__ == "__main__" but does imports
+       underneath it (poetry)
 
-    These are usually pretty small anyways, so it's probably OK to handle them
-    a little more loosely than scripts.
+    As a result, and since they are pretty small usually, we can be more flexible
+    with parsing -
+    1. extract all top-level import statements or import statements under if __name__ == "__main__"
+       into their own unit
+    2. execute the import unit at server start
+    3. execute the rest
+    this will only cause problems if some tool has order-dependent imports underneath e.g. a
+    platform check and we can trace a warning if that is the case.
     """
-    pass
+    def __init__(self, module_name, args):
+        report('start ModuleHandler')
+        self._module_name, self._spec = _get_module_details(module_name)
 
 
-def handle_command(text: str) -> int:
-    ...
+    def main(self):
+        loader = self._spec.loader
+        try:
+            code = loader.get_code(self._module_name)
+        except ImportError as e:
+            raise ImportError(format(e)) from e
+        if code is None:
+            raise ImportError("No code object available for %s" % self._module_name)
 
 
-def preprocess_args(args: List[str]) -> List[str]:
-    if not args[0].startswith('-'):
-        # Leading command, just insert -- and return.
-        return [args[0], '--', *args[1:]]
-
-    # Otherwise, insert after terminal arguments.
-    terminal_args = '-f', '-m'
-    out = []
-    args = iter(args)
-    for arg in args:
-        if arg in terminal_args:
-            out.append(arg)
-            try:
-                out.append(next(args))
-            except StopIteration:
-                # TODO: Error, command requires argument.
-                return []
-            out.append('--')
-            out.extend(args)
-    return out
-
-
-def main():
-    report('start main()')
-    # TODO: Python version guards.
+def parse_args(args=None):
+    #args = preprocess_args(args)
     parser = argparse.ArgumentParser(
         description='''
         Invoke Python commands in an application server.
@@ -256,21 +314,37 @@ def main():
         help='server control'
     )
     selector = parser.add_mutually_exclusive_group(required=True)
+    # We have to have an option name otherwise the first value in `args` might
+    # be taken as the script path.
     selector.add_argument('-f', help='path to script')
-    selector.add_argument('-m', help='module')
+    # Deferred.
+    #selector.add_argument('-m', help='module name')
+
     parser.add_argument('args', nargs='*')
-    args = preprocess_args(sys.argv)
-    if not args:
-        parser.print_usage(sys.stderr)
-    args = parser.parse_args()
+
+    parsed = parser.parse_args(args)
+    return parser, parsed
+
+
+def main():
+    report('start main()')
+    parser, args = parse_args()
     if args.f:
         path = args.f
         if not os.path.exists(path):
-            print(f'{path} does not exist')
-        handler = PathHandler(path)
+            parser.error(f'{path} does not exist')
+        handler = PathHandler(path, args.args)
+    #elif args.m:
+    #    # We do not have a good strategy for avoiding import of the parent module
+    #    # so for now just reject.
+    #    if '.' in args.m:
+    #        parser.error('Sub-modules are not supported')
+    #    handler = ModuleHandler(args.m, args.args)
     else:
         parser.print_usage(sys.stderr)
         sys.exit(1)
+
+    sys.argv = handler.argv
 
     if args.ctl:
         from .lib._lib import CliServerManager, ConnectionFailed

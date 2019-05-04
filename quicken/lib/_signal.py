@@ -39,7 +39,6 @@ def _settable_signal(sig) -> bool:
 
 
 signal_range = set(range(1, signal.NSIG))
-# XXX: Can be signal.valid_signals() in 3.8+
 settable_signals = set(filter(_settable_signal, signal_range))
 
 if not sys.platform.startswith('win'):

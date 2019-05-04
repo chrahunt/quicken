@@ -7,7 +7,7 @@ import tempfile
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import ContextManager, List
+from typing import ContextManager, List, TextIO, Tuple, Union
 
 from quicken.lib._signal import settable_signals
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def chdir(path: Path) -> ContextManager:
+def chdir(path: Union[Path, str]) -> ContextManager:
     current_path = Path.cwd()
     try:
         os.chdir(str(path))
@@ -76,7 +76,7 @@ def argv(args: List[str]) -> ContextManager:
 
 
 @contextmanager
-def umask(umask: int) -> ContextManager:
+def umask(umask: int) -> ContextManager[None]:
     """Set umask within the context.
     """
     umask = os.umask(umask)
@@ -87,7 +87,7 @@ def umask(umask: int) -> ContextManager:
 
 
 @contextmanager
-def preserved_signals() -> ContextManager:
+def preserved_signals() -> ContextManager[None]:
     handlers = [(s, signal.getsignal(s)) for s in settable_signals]
     try:
         yield
@@ -105,7 +105,7 @@ def preserved_signals() -> ContextManager:
 
 
 @contextmanager
-def captured_std_streams() -> ContextManager:
+def captured_std_streams() -> ContextManager[Tuple[TextIO, TextIO, TextIO]]:
     """Capture standard streams and provide an interface for interacting with
     them.
 
@@ -125,6 +125,8 @@ def captured_std_streams() -> ContextManager:
     try:
         yield os.fdopen(stdin_w, 'w'), os.fdopen(stdout_r), os.fdopen(stderr_r)
     finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
         os.close(stdin_r)
         os.close(stdout_w)
         os.close(stderr_w)

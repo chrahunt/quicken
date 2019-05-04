@@ -15,6 +15,7 @@ from . import QuickenError
 from ._client import Client
 from ._constants import socket_name, server_state_name, stop_socket_name
 from ._imports import InterProcessLock
+from ._multiprocessing import set_fd_sharing_base_path_fd
 from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
 from ._typing import MYPY_CHECK_RUNNING
@@ -71,7 +72,7 @@ def need_server_reload(manager, reload_server, user_data):
     return False
 
 
-def _server_runner_wrapper(
+def server_runner_wrapper(
     name: str,
     main_provider: MainProvider,
     # /,
@@ -99,6 +100,8 @@ def _server_runner_wrapper(
     main_provider = partial(with_reset_authkey, main_provider)
 
     runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
+
+    set_fd_sharing_base_path_fd(runtime_dir.fileno())
 
     manager = CliServerManager(runtime_dir)
 

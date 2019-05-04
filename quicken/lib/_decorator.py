@@ -69,9 +69,9 @@ def quicken(
 
             # Lazy import to avoid overhead.
             report('load quicken library')
-            from ._lib import _server_runner_wrapper
+            from ._lib import server_runner_wrapper
             report('end load quicken library')
-            return _server_runner_wrapper(
+            return server_runner_wrapper(
                 name,
                 main_provider,
                 runtime_dir_path=runtime_dir_path,

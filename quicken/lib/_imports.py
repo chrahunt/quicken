@@ -12,6 +12,7 @@ from ._typing import MYPY_CHECK_RUNNING
 
 if MYPY_CHECK_RUNNING:
     import asyncio
+    import multiprocessing.connection as multiprocessing_connection
 
     from typing import Type
 
@@ -37,6 +38,13 @@ class Modules:
         with patch_modules(modules=['six']):
             from fasteners import InterProcessLock
         return InterProcessLock
+
+    @property
+    def multiprocessing_connection(self) -> Type[multiprocessing_connection]:
+        # Saves 2ms since we don't use randomly-created sockets (tempfile, shutil)
+        with patch_modules(modules=['tempfile']):
+            import multiprocessing.connection
+        return multiprocessing.connection
 
 
 sys.modules[__name__] = Modules()

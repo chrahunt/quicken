@@ -458,6 +458,7 @@ class Server:
     async def _serve_stop(self):
         sock = self._stop_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.bind(self._stop_socket_path)
+        sock.listen(1)
         sock.setblocking(False)
         self._loop.add_reader(sock.fileno(), self._on_stop_connect)
 

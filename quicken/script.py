@@ -2,6 +2,7 @@
 command.
 """
 import importlib
+import os
 import sys
 
 from ._scripts import (
@@ -19,7 +20,9 @@ def callback(parts):
     function_name = '.'.join(function_parts)
     name = f'quicken.entrypoint.{module_name}.{function_name}'
 
-    @quicken(name)
+    log_file = os.environ.get('QUICKEN_LOG')
+
+    @quicken(name, log_file=log_file)
     def main():
         module = importlib.import_module(module_name)
         return get_nested_attr(module, function_parts)

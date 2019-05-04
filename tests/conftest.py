@@ -1,10 +1,13 @@
 import logging
 import logging.config
 import os
+import subprocess
 import sys
 import threading
+import venv
 
 from pathlib import Path
+from typing import List
 
 import pytest
 
@@ -23,7 +26,7 @@ except ImportError:
     else:
         raise
 
-
+from .utils import isolated_filesystem
 from .utils.pytest import current_test_name
 from .utils.process import active_children, disable_child_tracking, kill_children
 
@@ -36,8 +39,17 @@ log_file_format = 'logs/{test_case}.log'
 pytest_plugins = "tests.plugins.timeout", "tests.plugins.strace"
 
 
+def get_log_file(test_name):
+    return Path(log_file_format.format(test_case=test_name)).absolute()
+
+
+@pytest.fixture
+def log_file_path():
+    return get_log_file(current_test_name())
+
+
 def pytest_runtest_setup(item):
-    path = Path(log_file_format.format(test_case=item.name)).absolute()
+    path = get_log_file(item.name)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     class TestNameAdderFilter(logging.Filter):
@@ -125,3 +137,15 @@ def pytest_timeout_timeout(item, report):
         report.longrepr = report.longrepr + '\nsubprocess stacks:\n' + '\n'.join(stacks)
 
     kill_children()
+
+
+@pytest.fixture(scope='module')
+def virtualenv():
+    def run_python(cmd: List[str], *args, **kwargs):
+        interpreter = Path(path) / 'bin' / 'python'
+        cmd.insert(0, str(interpreter))
+        return subprocess.run(cmd, *args, **kwargs)
+
+    with isolated_filesystem() as path:
+        venv.create(path, symlinks=True, with_pip=True)
+        yield run_python
