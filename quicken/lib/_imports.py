@@ -42,6 +42,9 @@ class Modules:
     @property
     def multiprocessing_connection(self) -> Type[multiprocessing_connection]:
         # Saves 2ms since we don't use randomly-created sockets (tempfile, shutil)
+        # Pre-load multiprocessing.reduction so the same shared pickler state is
+        # available everywhere.
+        import multiprocessing.reduction
         with patch_modules(modules=['tempfile']):
             import multiprocessing.connection
         return multiprocessing.connection

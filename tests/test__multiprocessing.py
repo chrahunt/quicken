@@ -7,10 +7,12 @@ from pathlib import Path
 import pytest
 
 from quicken.lib._multiprocessing import run_in_process
+from quicken.lib._multiprocessing_reduction import set_fd_sharing_base_path_fd
 
 from .utils import isolated_filesystem
 from .utils.process import contained_children
 from .utils.pytest import non_windows
+from .utils.watch import wait_for_create
 
 
 pytestmark = non_windows
@@ -76,3 +78,35 @@ def test_function_detach_works():
 
         assert manager.active_children(), \
             'Process should still be up'
+
+
+@pytest.mark.timeout(5)
+def test_textiowrapper_serialization_works():
+    shared_text = 'hello\n'
+    def acceptor():
+        listener = multiprocessing.connection.Listener('socket')
+        conn = listener.accept()
+        obj = conn.recv()
+        obj.write(shared_text)
+        obj.flush()
+        obj.close()
+
+    with isolated_filesystem() as path:
+        cwd_fd = os.open('.', os.O_RDONLY)
+        set_fd_sharing_base_path_fd(cwd_fd)
+
+        p = multiprocessing.Process(target=acceptor)
+        p.start()
+
+        wait_for_create(path / 'socket', 2)
+        r, w = os.pipe()
+        r_obj = os.fdopen(r, closefd=False)
+        w_obj = os.fdopen(w, 'w', closefd=False)
+        c = multiprocessing.connection.Client('socket')
+        c.send(w_obj)
+        text = r_obj.readline()
+        assert text == shared_text
+        os.close(r)
+        os.close(w)
+        p.join()
+        assert p.exitcode == 0, 'Process must have exited cleanly'

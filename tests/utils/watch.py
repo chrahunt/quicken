@@ -1,7 +1,9 @@
-from collections import namedtuple
 import logging
 import signal
 import sys
+
+from collections import namedtuple
+from pathlib import Path
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -53,7 +55,12 @@ def _wait_for(action: Action, timeout: float = 5) -> bool:
 
     # Start observer first, otherwise we may receive unwatched events between
     # check and observer start.
-    with chdir(action.path.dir):
+    if hasattr(action.path, 'dir'):
+        parent = action.path.dir
+    elif isinstance(action.path, Path):
+        parent = action.path.parent
+
+    with chdir(parent):
         observer = Observer(timeout=0)
         # This correctly uses cwd as long as we start before changing directory.
         observer.schedule(Handler(), '.')
