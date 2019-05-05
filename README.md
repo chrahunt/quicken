@@ -1,86 +1,161 @@
 # quicken
 
-Make Python tools fast.
+[![Documentation](https://readthedocs.org/projects/quicken/badge/)](https://quicken.readthedocs.io/en/latest/)
+[![Build Status](https://dev.azure.com/chrahunt/quicken/_apis/build/status/chrahunt.quicken?branchName=master)](https://dev.azure.com/chrahunt/quicken/_build/latest?definitionId=1&branchName=master)
+[![Python Versions](https://img.shields.io/pypi/pyversions/quicken.svg)](https://pypi.org/project/quicken/)
 
-Before:
+Make Python tools start fast.
+
+When a quickened script is executed the first time it starts a server in the
+background, paying a one time cost to speed up execution for every other execution.
+
+Quicken only speeds up applications on Linux, but transparently falls back
+to executing scripts directly on unsupported platforms, with minimal overhead.
+
+Generally, an application can benefit if:
+
+1. It takes more than 100ms to start on an average machine
+1. `python -X importtime` shows that the startup time is related to module
+   importing
+
+To see how fast an app can be, check the latest benchmark results run with each
+test [here](https://dev.azure.com/chrahunt/quicken/_build/latest?definitionId=1&branchName=master) and
+interpretation [here](https://github.com/chrahunt/quicken/wiki/Benchmark-interpretation).
+
+
+## Usage
+
+### `quicken.script`
+
+`quicken.script` is a helper that can wrap console_scripts as supported by several Python packaging tools.
+
+If our console script is `hello=hello.cli:main`, then to use `quicken.script` we would add
+`helloc=quicken.script:hello.cli._.main`. In words: replace `:` with `._.` and prepend `quicken.script:`.
+
+Once set up, we can use `helloc` just like `hello`, but it should be faster after the first time.
+
+Since `quicken` is still alpha software, it would be wise to provide a second
+command for testing as above, instead of only having a quicken-based command. We
+use a `c` suffix since it's a `c`lient.
+
+If using setuptools (`setup.py`):
 
 ```python
-import sys
+setup(
+    ...
+    entry_points={
+        'console_scripts': [
+            'hello=hello.cli:main',
+            # With quicken
+            'hello=quicken.script:hello.cli._.main',
+        ],
+    },
+    ...
+)
+```
 
-import slow_module
-import has_lots_of_dependencies
+If using poetry
 
+```toml
+[tools.poetry.scripts]
+hello = 'hello.cli:main'
+# With quicken
+helloc = 'quicken.script:hello.cli._.main'
+```
+
+If using flit
+
+```toml
+[tools.flit.scripts]
+hello = 'hello.cli:main'
+# With quicken
+helloc = 'quicken.script:hello.cli._.main'
+```
+
+### `quicken.ctl_script`
+
+Similar to the above, using `quicken.ctl_script` provides a CLI to stop and
+check the status of a quicken server.
+
+Setuptools example:
+
+```python
+setup(
+    ...
+    entry_points={
+        'console_scripts': [
+            'hello=hello.cli:main',
+            # With quicken
+            'helloc=quicken.script:hello.cli._.main',
+            # Server control command
+            'helloctl=quicken.ctl_script:hello.cli._.main',
+        ],
+    },
+    ...
+)
+```
+
+Then we can use `helloctl status` to see the server status information and
+`helloctl stop` to stop the application server.
+
+### `quicken` CLI
+
+The `quicken` command can be use to quicken plain Python scripts that look like
+
+```python
+# script.py
+...
 
 def main():
-    print('hello world')
-    slow_module.do_work(has_lots_of_dependencies)
+    pass
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    main()
 ```
 
-After:
+Running `quicken -f script.py` followed by arguments will start the application server and
+run all code before `if __name__ == '__main__'`. For the first and subsequent commands, only
+the code in `if __name__ == '__main__'` will be executed. If the script is updated then a new
+server will be started.
 
-```python
-import sys
+To see the status of the server: `quicken --ctl status -f script.py`
 
-from quicken import quicken
+To stop the server: `quicken --ctl stop -f script.py`
 
-
-@quicken('app')
-def main_wrapper():
-    import slow_module
-    import has_lots_of_dependencies
-
-    def main():
-        print('hello world')
-        slow_module.do_work(has_lots_of_dependencies)
-
-    return main
-
-
-if __name__ == '__main__'
-    sys.exit(main_wrapper())
-```
-
-That's it! The first time `main()` is invoked a server will be created and
-stay up even after the process finishes. When another process starts up it
-will request the server to execute `main`.
- 
-This speeds up command-line applications with startup bottlenecks related to
-module loading and initialization.
-
-If `python -c ''` takes 10ms, this module takes around 40ms. That's how
-fast your command-line apps can start every time after the server is up.
-
+The server is identified using the full path to the script.
 
 # Why
 
-Python command-line tools are slow. We can reduce dependencies, do lazy
-importing, and do little/no work at the module level but these can only go
-so far.
+Python command-line tools can feel slow. There are tricks that can be used to
+speed up startup, but implementing them in individual packages is not scalable,
+and can slow development. The purpose of this project is:
 
-Our goal is to speed up the cli without giving up any dependencies. Every Python
-CLI tool should be able to get to work in less than 100ms.
-
-# Goals
-
-* Be as fast as possible when invoked as a client, be pretty fast when invoked
-  and we need to start a server.
+1. provide one way to speed up app startup, with a focus on strategies that
+   can apply across a large number of applications using normal Python
+   development conventions
+1. find areas of improvement that can be folded back into Python itself
+1. make it easier to focus on application logic and not startup time concerns
 
 # Limitations
 
 * Unix only.
 * Debugging may be less obvious for end users or contributors.
-* Access to the socket file implies access to the daemon (and the associated command that it would run if asked).
+* Access to the socket file implies access to the server and ability to run commands. The library tries to
+  mandate that the directory used for runtime files is only owned by the user, for best results use
+  XDG_RUNTIME_DIR as provided by `pam_systemd` or the equivalent for your distribution.
 
 # Tips
 
 * Profile import time with -X importtime, see if your startup is actually the
   problem. If it's not then this package will not help you.
-* Distribute your package as a wheel. When wheels are installed they create
-  scripts that do not import `pkg_resources`, which can save 60ms+ depending
-  on disk speed and caching.
+* Ensure your package can be built as a wheel, even if it's not distributed as
+  one. When wheels are installed they create scripts that do not import `pkg_resources`,
+  which can save 60ms+ depending on disk speed and caching.
 
 # Development
+
+```
+poetry install
+poetry run pytest -s -ra
+```
