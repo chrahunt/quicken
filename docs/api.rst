@@ -1,9 +1,9 @@
 API Reference
 =============
 
-.. module:: quicken
+.. module:: quicken.lib
 
 The main interface
 
-.. autofunction:: cli_factory
+.. autofunction:: quicken
    :decorator:
