@@ -1,11 +1,13 @@
 [tool.poetry]
 name = "quicken"
 version = "0.1.0"
-description = "Make Python apps fast."
+
 authors = ["Chris Hunt <chrahunt@gmail.com>"]
+description = "Make Python apps fast."
+documentation = "https://quicken.readthedocs.io/en/latest/"
+homepage = "https://github.com/chrahunt/quicken"
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/chrahunt/quicken"
 repository = "https://github.com/chrahunt/quicken"
 
 [tool.poetry.dependencies]
@@ -37,5 +39,5 @@ quicken-c = "quicken.script:quicken._cli._.main"
 quicken-ctl = "quicken.ctl_script:quicken._cli._.main"
 
 [build-system]
-requires = ["poetry>=0.12"]
-build-backend = "poetry.masonry.api"
+requires = ["poetry>=0.12", "rtd-poetry"]
+build-backend = "rtd_poetry"
