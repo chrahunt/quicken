@@ -36,9 +36,6 @@ quicken = "quicken._cli:main"
 quicken-c = "quicken.script:quicken._cli._.main"
 quicken-ctl = "quicken.ctl_script:quicken._cli._.main"
 
-[tool.intreehooks]
-build-backend = "pyproject"
-
 [build-system]
-requires = ["poetry>=0.12", "intreehooks"]
-build-backend = "intreehooks:loader"
+requires = ["poetry>=0.12", "rtd-poetry"]
+build-backend = "rtd_poetry"
