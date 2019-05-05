@@ -84,7 +84,3 @@ CLI tool should be able to get to work in less than 100ms.
   on disk speed and caching.
 
 # Development
-
-```
-ln -sf ../.githooks .git/hooks
-```
