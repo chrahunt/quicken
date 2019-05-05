@@ -1,108 +1,16 @@
-quicken
-=======
-
-Quicken is a library that helps Python applications start more quickly, with a focus on doing the "right thing" for
-wrapping CLI-based tools.
-
-When a quicken-wrapped command is executed the first time, an application server will be started. If the server
-is already up then the command will be executed in a ``fork``ed child, which avoids the overhead of loading
-libraries.
-
-Quicken only speeds up applications on Unix platforms, but falls back to executing commands directly
-on non-Unix platforms.
-
-The library tries to be transparent for applications. Every time a command is run all context is sent from the
-client to the server, including:
-
-* command-line arguments
-* current working directory
-* environment
-* umask
-* file descriptors for stdin/stdout/stderr
-
-``quicken.script``
-==================
-
-For command-line tool authors that want to speed up applications, simply add quicken as a
-dependency, then use ``quicken.script`` in your ``console_scripts`` (or equivalent).
-
-If your existing entry point is ``my_app.cli:main``, then you would use ``quicken.script:my_app.cli._.main``.
-
-For example, if using setuptools (``setup.py``):
-
-.. code-block:: python
-
-   setup(
-       ...
-       entry_points={
-           'console_scripts': [
-               'my-command=my_app.cli:main',
-               # With quicken
-               'my-commandc=quicken.script:my_app.cli._.main',
-           ],
-       },
-       ...
-   )
-
-If using poetry
-
-.. code-block:: toml
-
-   [tools.poetry.scripts]
-   poetry = 'poetry:console.run'
-   # With quicken
-   poetryc = 'quicken.script:poetry._.console.run'
-
-If using flit
-
-.. code-block:: toml
-
-   [tools.flit.scripts]
-   flit = "flit:main"
-   # With quicken
-   flitc = "quicken.script:flit._.main"
-
-
-``quicken`` command
-===================
-
-The ``quicken`` command can be used with basic scripts and command-line tools that do not use quicken built-in.
-
-Given a script ``script.py``, like
-
-.. code-block:: python
-
-   import click
-   import requests
-
-   ...
-
-   @click.command()
-   def main():
-       """My script."""
-       ...
-
-   if __name__ == '__main__':
-       main()
-
-
-running ``quicken -f script.py arg1 arg2`` once will start the application server then run ``main()``. Running the command
-again like ``quicken -f script.py arg2 arg3`` will run the command on the server, and should be faster
-
-If ``script.py`` is changed then the server will be restarted the next time the command is run.
-
+.. mdinclude:: ../README.md
 
 Differences and restrictions
 ============================
 
-The library tries to be transparent for applications, but it cannot be exactly the same. Specifically here
-is the behavior you can expect:
+The library tries to be transparent for applications. Specifically here is the behavior you can expect:
 
-* ``sys.argv`` is set to the list of arguments of the client
-* ``sys.stdin``, ``sys.stdout``, and ``sys.stderr`` are sent from the client to the command process, any console loggers
+* command-line arguments: ``sys.argv`` is set to the list of arguments of the client
+* file descriptors for stdin/stdout/stderr: ``sys.stdin``, ``sys.stdout``, and ``sys.stderr`` are sent from the client to the command process, any console loggers
   are re-initialized with the new streams
-* ``os.environ`` is copied from the client to the command process
-* we change directory to the cwd of the client process
+* environment: ``os.environ`` is copied from the client to the command process
+* current working directory: we change directory to the cwd of the client process
+* umask is set to the same as the client
 
 The setup above is guaranteed to be done before the registered script function
 is invoked.

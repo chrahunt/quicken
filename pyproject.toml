@@ -32,6 +32,8 @@ pytest-mock = "^1.10"
 sphinxcontrib-trio = "^1.0"
 ch = "^0.1.2"
 pytest-benchmark = "^3.2"
+m2r = "^0.2.1"
+pygments-github-lexers = "^0.0.5"
 
 [tool.poetry.scripts]
 quicken = "quicken._cli:main"

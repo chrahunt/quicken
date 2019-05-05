@@ -6,12 +6,26 @@
 # full list see the documentation:
 # http://www.sphinx-doc.org/en/master/config
 
-from pathlib import Path
 import sys
+import types
+
+from pathlib import Path
 
 # -- Path setup --------------------------------------------------------------
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# -- Syntax highlighting -----------------------------------------------------
+
+from pygments import lexers
+
+lexers.find_lexer_class('TOML')
+
+# -- Project-specific configurat ---------------------------------------------
+
+module = types.ModuleType('quicken.lib._typing')
+module.MYPY_CHECK_RUNNING = True
+sys.modules['quicken.lib._typing'] = module
 
 # -- Project information -----------------------------------------------------
 
@@ -42,6 +56,7 @@ extensions = [
     'sphinx_autodoc_typehints',
     'sphinxcontrib_trio',
     'sphinx.ext.viewcode',
+    'm2r',
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -49,9 +64,7 @@ templates_path = ['_templates']
 
 # The suffix(es) of source filenames.
 # You can specify multiple suffix as a list of string:
-#
-# source_suffix = ['.rst', '.md']
-source_suffix = '.rst'
+source_suffix = ['.rst', '.md']
 
 # The master toctree document.
 master_doc = 'index'

@@ -1,5 +1,6 @@
 # quicken
 
+[![PyPI Version](https://img.shields.io/pypi/v/quicken.svg)](https://pypi.org/project/quicken/)
 [![Documentation](https://readthedocs.org/projects/quicken/badge/)](https://quicken.readthedocs.io/en/latest/)
 [![Build Status](https://dev.azure.com/chrahunt/quicken/_apis/build/status/chrahunt.quicken?branchName=master)](https://dev.azure.com/chrahunt/quicken/_build/latest?definitionId=1&branchName=master)
 [![Python Versions](https://img.shields.io/pypi/pyversions/quicken.svg)](https://pypi.org/project/quicken/)
@@ -18,19 +19,20 @@ Generally, an application can benefit if:
 1. `python -X importtime` shows that the startup time is related to module
    importing
 
-To see how fast an app can be, check the latest benchmark results run with each
-test [here](https://dev.azure.com/chrahunt/quicken/_build/latest?definitionId=1&branchName=master) and
-interpretation [here](https://github.com/chrahunt/quicken/wiki/Benchmark-interpretation).
-
+To see how fast an app can be, check out the latest benchmark results in
+[CI](https://dev.azure.com/chrahunt/quicken/_build/latest?definitionId=1&branchName=master) and
+interpretation in wiki [here](https://github.com/chrahunt/quicken/wiki/Benchmark-interpretation).
 
 ## Usage
 
 ### `quicken.script`
 
-`quicken.script` is a helper that can wrap console_scripts as supported by several Python packaging tools.
+`quicken.script` is a helper that can wrap `console_scripts` as supported by several Python packaging tools.
 
 If our console script is `hello=hello.cli:main`, then to use `quicken.script` we would add
-`helloc=quicken.script:hello.cli._.main`. In words: replace `:` with `._.` and prepend `quicken.script:`.
+`helloc=quicken.script:hello.cli._.main`.
+
+In words: replace ":" with `._.` and prepend `quicken.script:`.
 
 Once set up, we can use `helloc` just like `hello`, but it should be faster after the first time.
 
@@ -42,34 +44,38 @@ If using setuptools (`setup.py`):
 
 ```python
 setup(
-    ...
+    # ...
     entry_points={
         'console_scripts': [
             'hello=hello.cli:main',
             # With quicken
-            'hello=quicken.script:hello.cli._.main',
+            'helloc=quicken.script:hello.cli._.main',
         ],
     },
-    ...
+    # ...
 )
 ```
 
 If using poetry
 
+<!--
+double-quotes needed for TOML syntax highlighter, otherwise making docs yields
+error: WARNING: Could not lex literal_block as "toml". Highlighting skipped.
+-->
 ```toml
 [tools.poetry.scripts]
-hello = 'hello.cli:main'
+hello = "hello.cli:main"
 # With quicken
-helloc = 'quicken.script:hello.cli._.main'
+helloc = "quicken.script:hello.cli._.main"
 ```
 
 If using flit
 
 ```toml
 [tools.flit.scripts]
-hello = 'hello.cli:main'
+hello = "hello.cli:main"
 # With quicken
-helloc = 'quicken.script:hello.cli._.main'
+helloc = "quicken.script:hello.cli._.main"
 ```
 
 ### `quicken.ctl_script`
@@ -143,7 +149,7 @@ and can slow development. The purpose of this project is:
 * Debugging may be less obvious for end users or contributors.
 * Access to the socket file implies access to the server and ability to run commands. The library tries to
   mandate that the directory used for runtime files is only owned by the user, for best results use
-  XDG_RUNTIME_DIR as provided by `pam_systemd` or the equivalent for your distribution.
+  `XDG_RUNTIME_DIR` as provided by `pam_systemd` or the equivalent for your distribution.
 
 # Tips
 
@@ -155,7 +161,7 @@ and can slow development. The purpose of this project is:
 
 # Development
 
-```
+```shell
 poetry install
 poetry run pytest -s -ra
 ```
