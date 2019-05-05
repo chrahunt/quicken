@@ -199,7 +199,7 @@ def _run_server(
     pid = os.getpid()
     server_state = {
         'create_time': time.time(),
-        'version': __version__,
+        'lib_version': __version__,
         'pid': pid,
         'user_data': user_data,
         'groups': os.getgroups(),

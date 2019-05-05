@@ -1,3 +1,4 @@
+import copy
 import errno
 import logging
 import os
@@ -132,3 +133,12 @@ def captured_std_streams() -> ContextManager[Tuple[TextIO, TextIO, TextIO]]:
         os.close(stderr_w)
         sys.stdin, sys.stdout, sys.stderr = \
             stdin_old, stdout_old, stderr_old
+
+
+@contextmanager
+def kept(o, attr):
+    current_attr = copy.copy(getattr(o, attr))
+    try:
+        yield
+    finally:
+        setattr(o, attr, current_attr)

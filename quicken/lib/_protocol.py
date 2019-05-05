@@ -7,7 +7,7 @@ import os
 import sys
 
 # Registers TextIOWrapper handler.
-from . import _multiprocessing
+from . import _multiprocessing_reduction
 from ._typing import MYPY_CHECK_RUNNING
 
 if MYPY_CHECK_RUNNING:

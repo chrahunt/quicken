@@ -15,6 +15,8 @@ from unittest.mock import Mock, patch
 import psutil
 import pytest
 
+import quicken.lib._lib
+
 from quicken import __version__
 from quicken.lib import QuickenError
 from quicken.lib._constants import server_state_name, socket_name
@@ -23,7 +25,7 @@ from quicken.lib._xdg import RuntimeDir
 
 from . import cli_factory
 from ..utils import (
-    argv, captured_std_streams, env, isolated_filesystem, umask)
+    argv, captured_std_streams, env, isolated_filesystem, kept, umask)
 from ..utils.path import get_bound_path
 from ..utils.process import contained_children
 from ..utils.pytest import current_test_name, non_windows
@@ -741,6 +743,54 @@ def test_server_reload_ok_when_stale_pidfile_exists():
             p.join()
             # Must not have been killed.
             assert p.exitcode == 0
+
+
+def test_server_reload_when_library_version_changes():
+    # Given the server is up when the library was at x.y.z
+    # And the library is updated, and quicken.__version__ is now x.y.(z + 1)
+    # When the decorated function is executed
+    # Then the server should be reloaded
+    # And the new function should be executed under a different ppid.
+    @cli_factory(current_test_name())
+    def runner():
+        def inner():
+            output_file.write_text(
+                f'{os.getpid()} {os.getppid()}', encoding='utf-8')
+            return 0
+        return inner
+
+    import quicken
+
+    def increment_patch(version: str):
+        x, y, z = version.split('.')
+        return '.'.join([x, y, str(int(z) + 1)])
+
+    with isolated_filesystem() as path:
+        output_file = path / 'test.txt'
+
+        with contained_children():
+            assert runner() == 0
+            main_pid = str(os.getpid())
+            runner_pid_1, parent_pid_1 = output_file.read_text(
+                encoding='utf-8').strip().split()
+            assert runner_pid_1 != main_pid
+            assert parent_pid_1 != runner_pid_1
+            assert parent_pid_1 != main_pid
+
+            with kept(quicken.lib._lib, '__version__'):
+                # Set on _lib since the attribute is imported directly.
+                quicken.lib._lib.__version__ = increment_patch(
+                    quicken.lib._lib.__version__
+                )
+
+                assert runner() == 0
+                runner_pid_2, parent_pid_2 = output_file.read_text(
+                    encoding='utf-8').strip().split()
+                assert runner_pid_2 != main_pid
+                assert parent_pid_2 != runner_pid_2
+                assert parent_pid_2 != main_pid
+                assert parent_pid_2 != parent_pid_1
+                assert runner_pid_1 != runner_pid_2
 
 
 def test_server_bypass_ok():

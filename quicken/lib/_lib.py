@@ -4,23 +4,21 @@ from __future__ import annotations
 
 import json
 import logging
-import multiprocessing
 import os
 import socket
 
 from contextlib import contextmanager
-from functools import partial
 
 from . import QuickenError
 from ._client import Client
 from ._constants import socket_name, server_state_name, stop_socket_name
 from ._imports import InterProcessLock
-from ._multiprocessing import set_fd_sharing_base_path_fd
+from ._multiprocessing_reduction import set_fd_sharing_base_path_fd
 from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
 from ._typing import MYPY_CHECK_RUNNING
 from ._xdg import cache_dir, chdir, RuntimeDir
-from .. import set_importing
+from .. import __version__, set_importing
 from .._timings import report
 
 if MYPY_CHECK_RUNNING:
@@ -51,6 +49,11 @@ def check_res_ids():
 
 def need_server_reload(manager, reload_server, user_data):
     server_state = manager.server_state
+    # Check version first, in case other key fields may have changed.
+    if __version__ != server_state['lib_version']:
+        logger.info('Reloading due to library version change')
+        return True
+
     gid = os.getgid()
     if gid != server_state['gid']:
         logger.info('Reloading server due to gid change')
@@ -69,7 +72,6 @@ def need_server_reload(manager, reload_server, user_data):
             logger.info('Reload requested by callback, stopping server.')
             return True
 
-    # TODO: Restart based on library version.
     return False
 
 
@@ -97,8 +99,6 @@ def server_runner_wrapper(
     if log_file is None:
         log_file = os.path.join(cache_dir(f'quicken-{name}'), 'server.log')
         log_file = os.path.abspath(log_file)
-
-    main_provider = partial(with_reset_authkey, main_provider)
 
     runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
 
@@ -132,6 +132,7 @@ def server_runner_wrapper(
     proxy = SignalProxy()
     # We must block signals before requesting remote process start otherwise
     # a user signal to the client may race with our ability to propagate it.
+    from multiprocessing.reduction import ForkingPickler
     with blocked_signals(forwarded_signals):
         state = ProcessState.for_current_process()
         report('requesting start')
@@ -148,22 +149,6 @@ def server_runner_wrapper(
     client.close()
     report('client finished')
     return response.contents
-
-
-def reset_authkey():
-    multiprocessing.current_process().authkey = os.urandom(32)
-
-
-def with_reset_authkey(main_provider):
-    """Ensure that user code is not executed without an authkey set.
-    """
-    main = main_provider()
-
-    def inner():
-        reset_authkey()
-        return main()
-
-    return inner
 
 
 class ConnectionFailed(Exception):
@@ -288,15 +273,6 @@ class CliServerManager:
     def lock(self):
         with chdir(self._runtime_dir):
             self._lock.acquire()
-
-        # We initialize the Client and Listener classes without an authkey
-        # parameter since there's no way to pre-share the secret securely
-        # between processes not part of the same process tree. However, the
-        # internal Client/Listener used as part of
-        # multiprocessing.resource_sharer DOES initialize its own Client and
-        # Listener with multiprocessing.current_process().authkey. We must have
-        # some value so we use this dummy value.
-        multiprocessing.current_process().authkey = b'0' * 32
 
         try:
             yield

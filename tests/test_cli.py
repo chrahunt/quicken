@@ -1,4 +1,3 @@
-import copy
 import os
 import subprocess
 import sys
@@ -11,7 +10,7 @@ import pytest
 
 from quicken._cli import parse_args, parse_file
 
-from .utils import captured_std_streams, chdir, env, isolated_filesystem
+from .utils import captured_std_streams, chdir, env, isolated_filesystem, kept
 from .utils.pytest import non_windows
 
 import logging; logger = logging.getLogger(__name__)
@@ -28,15 +27,6 @@ def sys_path(path):
         yield
     finally:
         sys.path = current_sys_path
-
-
-@contextmanager
-def kept(o, attr):
-    current_attr = copy.copy(getattr(o, attr))
-    try:
-        yield
-    except:
-        setattr(o, attr, current_attr)
 
 
 def test_args_ctl_passthru():
