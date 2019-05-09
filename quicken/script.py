@@ -1,33 +1,47 @@
 """Entrypoint wrapper that starts a quicken server around the provided
-command.
+command, passing through all arguments.
+
+The wrapper calculates a digest with:
+
+1. parent directory of __main__.__file__
+2. module + func
+3.
+
+This wrapper supports the following use cases:
+
+1. wrapped module referred to by a single utility
+2. different versions in different virtual environments
+3. single named utility
 """
-import importlib
+import operator
 import os
 import sys
 
-from ._scripts import (
-    get_attribute_accumulator, get_nested_attr, parse_script_spec
-)
+from ._scripts import wrapper_script
 
 
 __all__ = []
 
 
-def callback(parts):
+def callback(helper):
     from .lib import quicken
-    module_parts, function_parts = parse_script_spec(parts)
-    module_name = '.'.join(module_parts)
-    function_name = '.'.join(function_parts)
-    name = f'quicken.entrypoint.{module_name}.{function_name}'
 
     log_file = os.environ.get('QUICKEN_LOG')
+    # 1 day
+    DEFAULT_IDLE_TIMEOUT = 86400
+    idle_timeout = float(
+        os.environ.get('QUICKEN_IDLE_TIMEOUT', DEFAULT_IDLE_TIMEOUT)
+    )
 
-    @quicken(name, log_file=log_file)
-    def main():
-        module = importlib.import_module(module_name)
-        return get_nested_attr(module, function_parts)
+    wrapper = quicken(
+        helper.name,
+        log_file=log_file,
+        reload_server=operator.ne,
+        user_data=helper.metadata,
+        server_idle_timeout=idle_timeout,
+    )
 
-    return main()
+    return wrapper(helper.get_func)()
 
 
-sys.modules[__name__] = get_attribute_accumulator(callback)
+sys.modules[__name__] = wrapper_script(callback)

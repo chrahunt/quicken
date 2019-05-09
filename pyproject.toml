@@ -34,11 +34,12 @@ ch = "^0.1.2"
 pytest-benchmark = "^3.2"
 m2r = "^0.2.1"
 pygments-github-lexers = "^0.0.5"
+python-ptrace = "^0.9.3"
 
 [tool.poetry.scripts]
 quicken = "quicken._cli:main"
-quicken-c = "quicken.script:quicken._cli._.main"
-quicken-ctl = "quicken.ctl_script:quicken._cli._.main"
+quickenc = "quicken.script:quicken._cli._.main"
+quickenctl = "quicken.ctl_script:quicken._cli._.main"
 
 [build-system]
 requires = ["poetry>=0.12", "rtd-poetry"]

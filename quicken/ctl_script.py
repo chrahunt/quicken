@@ -7,9 +7,7 @@ Valid commands are:
 """
 from .lib._lib import CliServerManager, ConnectionFailed
 from .lib._xdg import RuntimeDir
-from ._scripts import (
-    get_attribute_accumulator, parse_script_spec
-)
+from ._scripts import wrapper_script
 
 import sys
 
@@ -27,15 +25,10 @@ def parse_args():
     return sys.argv[1]
 
 
-def callback(parts):
-    module_parts, function_parts = parse_script_spec(parts)
-    module_name = '.'.join(module_parts)
-    function_name = '.'.join(function_parts)
-    # TODO: De-duplicate key creation.
-    name = f'quicken.entrypoint.{module_name}.{function_name}'
+def callback(helper):
+    name = helper.name
 
-    # TODO: De-duplicate runtime dir name construction.
-    runtime_dir = RuntimeDir(f'quicken-{name}')
+    runtime_dir = RuntimeDir(name)
 
     manager = CliServerManager(runtime_dir)
 
@@ -58,4 +51,4 @@ def callback(parts):
             sys.stderr.write('Unknown action')
             sys.exit(1)
 
-sys.modules[__name__] = get_attribute_accumulator(callback)
+sys.modules[__name__] = wrapper_script(callback)

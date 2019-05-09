@@ -97,10 +97,10 @@ def server_runner_wrapper(
         raise QuickenError('user_data must be serializable') from e
 
     if log_file is None:
-        log_file = os.path.join(cache_dir(f'quicken-{name}'), 'server.log')
+        log_file = os.path.join(cache_dir(name), 'server.log')
         log_file = os.path.abspath(log_file)
 
-    runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
+    runtime_dir = RuntimeDir(name, runtime_dir_path)
 
     set_fd_sharing_base_path_fd(runtime_dir.fileno())
 

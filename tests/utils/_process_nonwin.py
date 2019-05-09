@@ -1,22 +1,36 @@
-import json
+"""Utilities for managing child processes within a scope - this ensures
+tests run cleanly even on failure and also gives us a mechanism to
+get debug info for our children.
+
+This approach creates a separate process that executes ptrace on the original,
+keeping track of everything.
+
+Information on traced processes is retrieved by querying the separate process.
+"""
 import logging
 import os
+import signal
 import sys
-import tempfile
-import time
 import threading
 
 from contextlib import contextmanager
-from pathlib import Path
-from typing import ContextManager, List, Set
+from multiprocessing import Pipe, Process
+from multiprocessing.connection import Connection
+from typing import ContextManager, List
 
 import psutil
+import ptrace.debugger
+import ptrace.error
 
-from fasteners import InterProcessLock
+#from ptrace.binding.func import PTRACE_O_TRACEEXIT
+from ptrace.debugger.process_event import (
+    NewProcessEvent, ProcessExecution, ProcessExit
+)
+from ptrace.debugger import ProcessSignal
 
 
 logger = logging.getLogger(__name__)
-
+logging.basicConfig(level=logging.DEBUG)
 
 __all__ = [
     'active_children',
@@ -26,187 +40,203 @@ __all__ = [
 ]
 
 
-class ChildManagerSharedState:
-    def __init__(self, base_path):
-        self._path = base_path
-        Path(self._path).touch()
+PTRACE_O_EXITKILL = 0x00100000
 
-        lock_file = self._path + '.lock'
-        self._lock = InterProcessLock(lock_file)
-        self._tlock = threading.RLock()
 
-        self.children: List[psutil.Process] = []
-        self.keys: Set[str] = set()
+class Debugger(ptrace.debugger.PtraceDebugger):
+    def __init__(self):
+        super().__init__()
+        self._lock = threading.Lock()
+        self.stopping = False
 
     @property
-    @contextmanager
-    def lock_guard(self):
-        with self._tlock:
-            with self._lock:
-                self.load()
-                try:
-                    yield
-                finally:
-                    self.save()
+    def pids(self):
+        return list(self.dict.keys())
 
-    # File format is:
-    # {
-    #   # List of unacknowledged process keys.
-    #   "keys": ["ppid[idx]", ...],
-    #   # Actual process information as updated by last opening process.
-    #   "processes": [[pid, create_time], ...]
-    # }
+    def __enter__(self):
+        self._lock.acquire()
+        return self
 
-    def load(self):
-        contents = Path(self._path).read_text(encoding='utf-8')
-        if not contents:
+    def __exit__(self, _exc_type, _exc_value, _exc_tb):
+        self._lock.release()
+
+
+def process_events(pid, debugger):
+    """Loop for processing events.
+    """
+    def process_event(pid, status):
+        try:
+            process = debugger.dict[pid]
+        except KeyError:
+            logger.warning('Unknown process: %d', pid)
             return
 
-        try:
-            data = json.loads(contents)
-        except json.JSONDecodeError:
-            logger.warning('Bad JSON text: "%r"', contents)
-            raise
+        event = process.processStatus(status)
+        signal = 0
+        to_continue = [process]
 
-        self.keys = set(data['keys'])
+        if isinstance(event, NewProcessEvent):
+            logger.debug('[%d] created', event.process.pid)
+            to_continue.append(event.process)
 
-        self.children = []
-        for pid, create_time in data['processes']:
+        elif isinstance(event, ProcessExit):
+            logger.debug('[%d] exit', pid)
+            debugger.deleteProcess(process)
+            return
+
+        elif isinstance(event, ProcessSignal):
+            logger.debug('[%d] signal: %d', pid, event.signum)
+            signal = event.signum
+
+        elif isinstance(event, ProcessExecution):
+            logger.debug('[%d] execution', pid)
+
+        else:
+            logger.debug('Received unknown event: %r (%s)', event, type(event))
+
+        if debugger.stopping:
+            return
+
+        for process in to_continue:
             try:
-                process = psutil.Process(pid=pid)
-            except psutil.NoSuchProcess:
-                pass
-            else:
-                if process.create_time() == create_time:
-                    self.children.append(process)
+                process.cont(signal)
+            except ptrace.error.PtraceError as e:
+                if 'No such process' in str(e):
+                    logger.warning('Tried to continue missing process %d', process.pid)
+                    debugger.deleteProcess(process)
 
-    def save(self):
-        data = {
-            'keys': list(self.keys),
-            'processes': [
-                [child.pid, child.create_time()]
-                for child in self.children
-            ],
-        }
+    process = debugger.addProcess(pid, is_attached=False)
 
-        with open(self._path, 'w', encoding='utf-8') as f:
-            f.write(json.dumps(data))
-            f.flush()
-            os.fsync(f.fileno())
+    with debugger:
+        logger.debug('Before restarting tracee')
+        process.cont()
+        logger.debug('After restarting tracee')
+
+    while debugger.dict:
+        logger.debug('Waiting for process')
+        pid, status = os.waitpid(-1, 0)
+        with debugger:
+            process_event(pid, status)
 
 
-class ChildManager:
-    """Register children with the eldest parent process.
+def self_attach_target(fd):
+    def detach():
+        # XXX: Should we actually not double-fork here? Then it would kill
+        #  everything if top-level process dies.
+        pid = os.fork()
+        if pid:
+            os._exit(0)
 
-    We do this instead of recursively getting children with psutil because
-    intermediate processes may have already exited.
+        os.setsid()
 
-    Behavior is undefined if fork occurs:
-    - from multiple threads (unless manager is disabled)
-    - from within callbacks registered with register_at_fork
-    """
-    def __init__(self, child_start_timeout: float = 5):
-        """
-        Args:
-            child_start_timeout: timeout (in seconds) to wait for the child process to
-              start. "Starting" in this case means the child handler runs.
-        """
-        # XXX: this directory is leaked
-        tempdir = tempfile.mkdtemp()
-        self._state = ChildManagerSharedState(f'{tempdir}/pids')
-        self._tls = threading.local()
-        self._tls.disabled = False
-        self._child_start_timeout = child_start_timeout
+    detach()
 
-        self._re_init()
+    def make_debugger():
+        debugger = Debugger()
+        # Avoid extraneous SIGTRAP.
+        debugger.traceExec()
+        debugger.traceFork()
+        debugger.traceClone()
+        # PTRACE_EVENT_TRACEEXIT isn't handled properly by python-ptrace.
+        #debugger.options |= PTRACE_O_TRACEEXIT | PTRACE_O_EXITKILL
+        debugger.options |= PTRACE_O_EXITKILL
+        return debugger
 
-        os.register_at_fork(
-            after_in_parent=self._after_in_parent,
-            after_in_child=self._after_in_child)
+    debugger = make_debugger()
 
-    def children_pop_all(self):
-        with self._state.lock_guard:
-            l = self._state.children
-            self._state.children = []
-        return l
+    conn = Connection(fd)
+    conn.send(os.getpid())
+    main_pid = conn.recv()
+
+    t = threading.Thread(target=process_events, args=(main_pid, debugger))
+    t.daemon = True
+    t.start()
+
+    # Let process proceed.
+    conn.send(True)
+
+    # Handle requests.
+    while True:
+        try:
+            req = conn.recv()
+        except:
+            logger.exception('Received exception on receive')
+            sys.exit()
+
+        if req == 'pids':
+            with debugger:
+                pids = list(debugger.dict.keys())
+            conn.send(pids)
+
+        elif req == 'stop':
+            # All but the main process.
+            with debugger:
+                debugger.stopping = True
+
+                for pid, process in debugger.dict.items():
+                    if pid != main_pid:
+                        process.kill(signal.SIGSTOP)
+            conn.send(list(debugger.dict.keys()))
+
+        elif req == 'detach':
+            with debugger:
+                for _, process in debugger.dict.items():
+                    process.detach()
+                pids = debugger.pids
+            conn.send(pids)
+
+
+class ChildTracer:
+    def __init__(self):
+        self._conn, self._child = Pipe()
+        p = Process(target=self_attach_target, args=(self._child.fileno(),))
+        p.start()
+        pid = self._conn.recv()
+        logger.debug('Tracer pid: %s', pid)
+        # TODO: prctl(PR_SET_PTRACER, pid)
+        # if /proc/sys/kernel/yama/ptrace_scope exists and has 1
+        self._conn.send(os.getpid())
+        # Wait to be ptraced before continuing.
+        self._conn.recv()
+        logger.debug('Continuing in parent')
 
     def active_children(self):
-        with self._state.lock_guard:
-            return self._state.children.copy()
-
-    @property
-    def disabled(self) -> bool:
-        """Disable tracking child processes spawned from this thread.
-        """
-        return self._tls.disabled
-
-    @disabled.setter
-    def disabled(self, v: bool):
-        self._tls.disabled = v
-
-    def _re_init(self):
-        """Initialization that happens in each process.
-        """
-        self._child_index = 0
-
-    def _make_key(self, pid, index):
-        return f'{pid}[{index}]'
-
-    def _after_in_child(self):
-        with self._state.lock_guard:
-            ppid = os.getppid()
-            key = self._make_key(ppid, self._child_index)
-            self._state.keys.add(key)
-
-            pid = os.getpid()
-            process = psutil.Process(pid=pid)
-            self._state.children.append(process)
-
-        self._re_init()
-
-    def _after_in_parent(self):
-        if self.disabled:
-            return
-
-        # Best effort, try to wait for the child to have actually started and
-        # written pid, so that if an error occurs we will clean up the process.
-        key = self._make_key(os.getpid(), self._child_index)
-        start = time.time()
-        now = start
-        while now - start < self._child_start_timeout:
-            with self._state.lock_guard:
-                try:
-                    self._state.keys.remove(key)
-                except KeyError:
-                    pass
-                else:
-                    break
-
-            time.sleep(0.005)
-            now = time.time()
+        self._conn.send('pids')
+        pids = self._conn.recv()
+        try:
+            i = pids.index(os.getpid())
+        except ValueError:
+            pass
         else:
-            logger.error(
-                'Child did not start in time (started: %d; now: %d)',
-                start,
-                now
-            )
+            pids.pop(i)
+        return [psutil.Process(pid=pid) for pid in pids]
 
-        # Unconditionally update index so next child doesn't conflict.
-        self._child_index += 1
+    def children_pop_all(self):
+        return self.active_children()
+
+    def send_stop(self):
+        self._conn.send('stop')
+        return self._conn.recv()
+
+    def detach(self):
+        self._conn.send('detach')
+        return self._conn.recv()
 
 
-child_manager = ChildManager()
+child_manager = ChildTracer()
 
 
-def active_children():
+def active_children() -> List[psutil.Process]:
+    """Returns the active child processes.
+    """
     return child_manager.active_children()
 
 
 @contextmanager
 def contained_children(
-        timeout=1, assert_graceful=True) -> ContextManager[ChildManager]:
+        timeout=1, assert_graceful=True) -> ContextManager[ChildTracer]:
     """Automatically kill any Python processes forked in this context, for
-    cleanup. Handles any descendents.
+    cleanup. Handles any descendants.
 
     Timeout is seconds to wait for graceful termination before killing children.
     """
@@ -227,7 +257,10 @@ def contained_children(
 
 
 def disable_child_tracking():
-    child_manager.disabled = True
+    _pids = child_manager.send_stop()
+    # May be different if something was killed.
+    pids = child_manager.detach()
+    return pids
 
 
 def kill_children(timeout=1) -> List[psutil.Process]:
@@ -239,9 +272,9 @@ def kill_children(timeout=1) -> List[psutil.Process]:
 
     Returns:
         list of processes that had to be killed forcefully.
-
     """
-    procs = child_manager.children_pop_all()
+    # TODO: Better checking.
+    procs = child_manager.active_children()
     for p in procs:
         try:
             p.terminate()

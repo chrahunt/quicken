@@ -6,6 +6,7 @@ import sys
 import threading
 import venv
 
+from contextlib import ExitStack
 from pathlib import Path
 from typing import List
 
@@ -28,7 +29,7 @@ except ImportError:
 
 from .utils import isolated_filesystem
 from .utils.pytest import current_test_name
-from .utils.process import active_children, disable_child_tracking, kill_children
+from .utils.process import disable_child_tracking, kill_children
 
 from quicken.lib._logging import UTCFormatter
 
@@ -122,8 +123,7 @@ def pytest_timeout_timeout(item, report):
     stacks = []
     # Prevent race conditions on fork since we spawn other processes to get
     # stacks.
-    disable_child_tracking()
-    children = active_children()
+    children = disable_child_tracking()
     for child in children:
         text = f'stack for ({child.pid}): {child.cmdline()}\n'
         try:
@@ -139,13 +139,23 @@ def pytest_timeout_timeout(item, report):
     kill_children()
 
 
-@pytest.fixture(scope='module')
-def virtualenv():
-    def run_python(cmd: List[str], *args, **kwargs):
-        interpreter = Path(path) / 'bin' / 'python'
+class Venv:
+    def __init__(self, path: Path):
+        self.path = path
+
+    def run(self, cmd: List[str], *args, **kwargs):
+        interpreter = Path(self.path) / 'bin' / 'python'
         cmd.insert(0, str(interpreter))
         return subprocess.run(cmd, *args, **kwargs)
 
-    with isolated_filesystem() as path:
-        venv.create(path, symlinks=True, with_pip=True)
-        yield run_python
+
+@pytest.fixture
+def virtualenvs():
+    class Provider:
+        def create(self):
+            path = stack.enter_context(isolated_filesystem())
+            venv.create(path, symlinks=True, with_pip=True)
+            return Venv(path)
+
+    with ExitStack() as stack:
+        yield Provider()

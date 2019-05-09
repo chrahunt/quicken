@@ -349,8 +349,7 @@ def main():
     if args.ctl:
         from .lib._lib import CliServerManager, ConnectionFailed
 
-        # TODO: De-duplicate runtime dir name construction.
-        runtime_dir = RuntimeDir(f'quicken-{handler.name}')
+        runtime_dir = RuntimeDir(handler.name)
 
         manager = CliServerManager(runtime_dir)
 
