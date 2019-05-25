@@ -33,7 +33,7 @@ def get_script_details(module: str, func: str):
         'func': func,
     }
     text = json.dumps(key, sort_keys=True, separators=(',', ':'))
-    digest = _sha512(text.encode('utf-8'))
+    digest = _sha512(text.encode('utf-8')).hexdigest()
     result = os.stat(main)
     key['mtime'] = result[stat.ST_MTIME]
     key['ctime'] = result[stat.ST_CTIME]

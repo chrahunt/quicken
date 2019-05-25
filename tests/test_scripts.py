@@ -12,6 +12,7 @@ from textwrap import dedent
 from quicken._scripts import get_attribute_accumulator, ScriptHelper
 
 from .utils import env, isolated_filesystem, kept
+from .utils.process import contained_children
 
 
 def test_attribute_accumulator():
@@ -151,24 +152,25 @@ def test_script_runs_server(virtualenvs):
 
         venv.run(['-m', 'pip', 'install', '.'])
 
-        test_pid = os.getpid()
-        state_file = path / 'test1.txt'
-        # TODO: Better control over server lifetime in tests under subprocess.
-        with env(QUICKEN_IDLE_TIMEOUT=str(5), TEST_STATE=str(state_file)):
-            result = subprocess.run([str(venv.path / 'bin' / 'hello')])
-            assert result.returncode == 0
-            text = state_file.read_text(encoding='utf-8')
-            runner_pid_1, runner_ppid_1 = [int(v) for v in text.split()]
-            assert test_pid != runner_pid_1
-            assert test_pid != runner_ppid_1
+        with contained_children():
+            test_pid = os.getpid()
+            state_file = path / 'test1.txt'
+            # TODO: Better control over server lifetime in tests under subprocess.
+            with env(QUICKEN_IDLE_TIMEOUT=str(5), TEST_STATE=str(state_file)):
+                result = subprocess.run([str(venv.path / 'bin' / 'hello')])
+                assert result.returncode == 0
+                text = state_file.read_text(encoding='utf-8')
+                runner_pid_1, runner_ppid_1 = [int(v) for v in text.split()]
+                assert test_pid != runner_pid_1
+                assert test_pid != runner_ppid_1
 
-        with env(TEST_STATE=str(state_file)):
-            result = subprocess.run([str(venv.path / 'bin' / 'hello')])
-            assert result.returncode == 0
-            text = state_file.read_text(encoding='utf-8')
-            runner_pid_2, runner_ppid_2 = [int(v) for v in text.split()]
-            assert runner_pid_1 != runner_pid_2
-            assert runner_ppid_1 == runner_ppid_2
+            with env(TEST_STATE=str(state_file)):
+                result = subprocess.run([str(venv.path / 'bin' / 'hello')])
+                assert result.returncode == 0
+                text = state_file.read_text(encoding='utf-8')
+                runner_pid_2, runner_ppid_2 = [int(v) for v in text.split()]
+                assert runner_pid_1 != runner_pid_2
+                assert runner_ppid_1 == runner_ppid_2
 
 
 def test_script_different_venv_different_servers():
@@ -185,6 +187,7 @@ def test_script_idle_timeout():
     # Given a project that declares a quicken script
     # And the project is installed in venv1
     ...
+
 
 def test_control_script_status():
     # Given a project that declares a quicken and quicken-ctl script

@@ -11,6 +11,7 @@ import pytest
 from quicken._cli import parse_args, parse_file
 
 from .utils import captured_std_streams, chdir, env, isolated_filesystem, kept
+from .utils.process import contained_children
 from .utils.pytest import non_windows
 
 import logging; logger = logging.getLogger(__name__)
@@ -230,15 +231,16 @@ def test_file_argv_set(log_file_path):
 
         args = ['hello']
         with env(QUICKEN_LOG=str(log_file_path)):
-            result = run_cli(
-                [
-                    '-f',
-                    str(Path('script.py')),
-                    *args
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            with contained_children():
+                result = run_cli(
+                    [
+                        '-f',
+                        str(Path('script.py')),
+                        *args
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
         assert result.stdout.decode('utf-8') == f'script.py\n{args[0]}\n'
 
 
@@ -260,28 +262,32 @@ def test_file_server_name_uses_absolute_path(log_file_path):
         '''))
 
         with env(QUICKEN_LOG=str(log_file_path)):
-            result = run_cli(
-                [
-                    '-f',
-                    str(script_a),
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            with contained_children():
+                result = run_cli(
+                    [
+                        '-f',
+                        str(script_a),
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+
             current_pid = str(os.getpid())
             runner_pid_1, parent_pid_1 = result.stdout.decode('utf-8').split()
             assert runner_pid_1 != current_pid
             assert parent_pid_1 != current_pid
 
             with chdir('a'):
-                result = run_cli(
-                    [
-                        '-f',
-                        script_a.name,
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
+                with contained_children():
+                    result = run_cli(
+                        [
+                            '-f',
+                            script_a.name,
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+
                 runner_pid_2, parent_pid_2 = result.stdout.decode('utf-8').split()
                 assert runner_pid_2 != current_pid
                 assert parent_pid_2 != current_pid

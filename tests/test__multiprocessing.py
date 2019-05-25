@@ -16,7 +16,7 @@ from quicken.lib._multiprocessing_reduction import (
 )
 
 from .utils import isolated_filesystem
-from .utils.process import contained_children
+from .utils.process import active_children, contained_children
 from .utils.pytest import non_windows
 from .utils.watch import wait_for_create
 
@@ -85,12 +85,12 @@ def test_function_detach_works():
         detach_process()
         time.sleep(5)
 
-    with contained_children() as manager:
+    with contained_children():
         run_in_process(runner, allow_detach=True)
         assert not multiprocessing.active_children(), \
             'Multiprocessing should not see active children'
 
-        assert manager.active_children(), \
+        assert active_children(), \
             'Process should still be up'
 
 
