@@ -28,9 +28,11 @@ class DeadlineTimer:
     def expires_from_now(self, seconds):
         if seconds < 0:
             raise ValueError('seconds must be positive')
+
         self.cancel()
-        wait = seconds % self.MAX_DURATION
-        self._time_remaining = max(seconds - wait, 0)
+
+        wait = min(seconds, self.MAX_DURATION)
+        self._time_remaining = seconds - wait
         self._handle = self._loop.call_later(wait, self._handle_expiration)
 
     def expires_at(self, seconds):
