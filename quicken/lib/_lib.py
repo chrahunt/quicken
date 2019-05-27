@@ -227,6 +227,11 @@ class CliServerManager:
             except FileNotFoundError:
                 pass
 
+            try:
+                os.unlink(stop_socket_name)
+            except FileNotFoundError:
+                pass
+
         run(
             main,
             log_file=log_file,
