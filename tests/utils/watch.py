@@ -34,8 +34,8 @@ def wait_for_delete(path: BoundPath, timeout: float = 5) -> bool:
 def _wait_for(action: Action, timeout: float = 5) -> bool:
     """
     Args:
-        path
-        timeout
+        action:
+        timeout:
     """
     def action_check():
         return action.path.exists() == action.present

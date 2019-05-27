@@ -100,6 +100,7 @@ class AsyncConnectionAdapter:
             async with self._disconnect_cv:
                 self._disconnect_cv.notify_all()
         self._detach_from_event_loop()
+        # XXX: Should include __cause__ or context.
         self._read_queue.put_nowait(ConnectionClose())
         self._connected = False
         self._loop.create_task(signal_disconnect())

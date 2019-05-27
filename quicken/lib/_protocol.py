@@ -7,7 +7,7 @@ import os
 import sys
 
 # Registers TextIOWrapper handler.
-from . import _multiprocessing_reduction
+from ._multiprocessing_reduction import dumps, loads
 from ._typing import MYPY_CHECK_RUNNING
 
 if MYPY_CHECK_RUNNING:
@@ -40,6 +40,25 @@ class StdStreams:
         self.stdin = stdin
         self.stdout = stdout
         self.stderr = stderr
+
+    def __getstate__(self):
+        """We implement a custom __getstate__ because Python has a default __reduce_ex__
+        that attempts to call __getstate__ on the members of our class.
+
+        When that happens and when using pytest's built-in std stream capturing, this
+        invokes _io.FileIO.__getstate__ which unconditionally raises an exception
+        ('cannot serialize _io.FileIO') in Python 3.7 and below.
+        """
+        return (
+            dumps(self.stdin),
+            dumps(self.stdout),
+            dumps(self.stderr),
+        )
+
+    def __setstate__(self, state):
+        self.stdin = loads(state[0])
+        self.stdout = loads(state[1])
+        self.stderr = loads(state[2])
 
 
 class ProcessState:

@@ -306,7 +306,7 @@ class ProcessConnectionHandler(ConnectionHandler):
         async def accept_request():
             try:
                 request: Request = await connection.recv()
-            except ConnectionClose:
+            except ConnectionClose as e:
                 logger.debug('Connection closed')
             except ConnectionResetError:
                 logger.debug('Connection reset')
@@ -318,8 +318,8 @@ class ProcessConnectionHandler(ConnectionHandler):
 
             # This occurs when we have disconnected from the client so cancel
             # any pending responses and kill the child process.
-            logger.debug('Killing child process')
             if process:
+                logger.debug('Killing child process')
                 try:
                     process.kill()
                 except ProcessLookupError:
