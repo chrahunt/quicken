@@ -9,10 +9,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from textwrap import dedent
 
+import pytest
+
 from quicken._scripts import get_attribute_accumulator, ScriptHelper
 
 from .utils import env, isolated_filesystem, kept
 from .utils.process import active_children, contained_children
+from .utils.pytest import non_windows
 from .utils.subprocess import track_state
 
 
@@ -100,6 +103,7 @@ def test_helper_runs_module_without_func():
         assert func() == 5
 
 
+@non_windows
 def test_script_runs_server(virtualenvs):
     # Given a project that declares a quicken script
     # When the script is executed
@@ -170,6 +174,7 @@ def test_script_runs_server(virtualenvs):
             print(active_children())
 
 
+@non_windows
 def test_script_different_venv_different_servers(virtualenvs):
     # Given a project that declares a quicken script
     # And the project is installed in venv1
@@ -245,6 +250,7 @@ def test_script_different_venv_different_servers(virtualenvs):
                 assert run1.ppid != run2.ppid
 
 
+@pytest.mark.skip
 def test_script_idle_timeout():
     # Given a project that declares a quicken script
     # And the project is installed in venv1
@@ -255,6 +261,7 @@ def test_script_idle_timeout():
     ...
 
 
+@pytest.mark.skip
 def test_control_script_status():
     # Given a project that declares a quicken and quicken-ctl script
     # And the server is up
@@ -263,6 +270,7 @@ def test_control_script_status():
     ...
 
 
+@pytest.mark.skip
 def test_control_script_stop():
     # Given a project that declares a quicken and quicken-ctl script
     # And the server is up

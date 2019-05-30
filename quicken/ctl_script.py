@@ -5,11 +5,11 @@ Valid commands are:
 * stop
 * status
 """
+import sys
+
 from .lib._lib import CliServerManager, ConnectionFailed
 from .lib._xdg import RuntimeDir
 from ._scripts import wrapper_script
-
-import sys
 
 
 __all__ = []
@@ -50,5 +50,6 @@ def callback(helper):
         else:
             sys.stderr.write('Unknown action')
             sys.exit(1)
+
 
 sys.modules[__name__] = wrapper_script(callback)

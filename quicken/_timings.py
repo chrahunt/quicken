@@ -1,11 +1,13 @@
-import os
+"""Consistent output for timing information.
+"""
+import logging
 import time
 
 
-def report(name):
-    """Used for reporting important timings.
+logger = logging.getLogger(__name__)
 
-    PYTHONHUNTER='kind="call", function="report", module="quicken._timings"'
+
+def report(name):
+    """Used for reporting timing information.
     """
-    if os.environ.get('QUICKEN_TRACE_TIMINGS'):
-        print(f'{time.perf_counter()}: {name}')
+    logger.debug('%f: %s', time.perf_counter(), name)

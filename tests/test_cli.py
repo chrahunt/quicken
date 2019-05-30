@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import sys
@@ -13,8 +14,11 @@ from quicken._cli import parse_args, parse_file
 from .utils import captured_std_streams, chdir, env, isolated_filesystem, kept
 from .utils.process import contained_children
 from .utils.pytest import non_windows
+from .utils.subprocess import track_state
 
-import logging; logger = logging.getLogger(__name__)
+
+logger = logging.getLogger(__name__)
+
 
 pytestmark = non_windows
 
@@ -186,41 +190,37 @@ def test_file_path_set():
         assert stdout.read().strip() == str(path / 'script.py')
 
 
+@pytest.mark.skip
 def test_file_path_set_symlink():
     # Given a file `script.py`
     # __file__ should be the full, resolved path to the file.
     ...
 
 
+@pytest.mark.skip
 def test_file_path_symlink_modified():
     ...
 
 
-# TODO: Make console scripts nicer to access for tests.
-def run_cli(*args, **kwargs):
-    runner_path = Path('runner.py')
-    runner_path.write_text(dedent('''
-    from quicken._cli import main
-
-    main()
-    '''))
-
-    cmd = [
-        sys.executable,
-        str(runner_path.absolute()),
-    ]
-
-    if args:
-        cmd.extend(args[0])
-
-    return subprocess.run(cmd, *args[1:], **kwargs)
+@pytest.fixture
+def quicken_venv(virtualenvs):
+    """Virtual environment with quicken installed.
+    """
+    venv = virtualenvs.create()
+    venv.run(['-m', 'pip', 'install', '--upgrade', 'pip'])
+    quicken_path = Path(__file__).parent / '..'
+    venv.run(['-m', 'pip', 'install', quicken_path])
+    path_paths = os.environ.get('PATH', '').split(os.pathsep)
+    path_paths.insert(0, str(venv.path / 'bin'))
+    with env(PATH=os.pathsep.join(path_paths)):
+        yield
 
 
-def test_file_argv_set(log_file_path):
+def test_file_argv_set(log_file_path, quicken_venv):
     # Given a file `script.py`
     # sys.argv should start with `script.py` and be followed by any
     # other arguments
-    with isolated_filesystem() as path:
+    with isolated_filesystem():
         Path('script.py').write_text(dedent('''
         import sys
 
@@ -232,64 +232,54 @@ def test_file_argv_set(log_file_path):
         args = ['hello']
         with env(QUICKEN_LOG=str(log_file_path)):
             with contained_children():
-                result = run_cli(
-                    [
-                        '-f',
-                        str(Path('script.py')),
-                        *args
-                    ],
+                result = subprocess.run(
+                    ['quicken', '-f', 'script.py', 'hello'],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
+
+        assert result.returncode == 0, f'process must succeed: {result}'
         assert result.stdout.decode('utf-8') == f'script.py\n{args[0]}\n'
 
 
-def test_file_server_name_uses_absolute_path(log_file_path):
-    # Given a file a/script.py
-    # And a server started from a/script.py
-    # When in a
-    # And quicken -f script.py is executed
+def test_file_server_name_uses_absolute_path(log_file_path, quicken_venv):
+    # Given a file `a/script.py`
+    # And a server started from `a/script.py`
+    # When in `a`
+    # And `quicken -f script.py` is executed
     # Then the server should be used for the call
-    with isolated_filesystem() as path:
+    logger.debug('hello world')
+    with isolated_filesystem():
         script_a = Path('a/script.py')
         script_a.parent.mkdir(parents=True)
         script_a.write_text(dedent('''
-        import os
+        import __test_helper__
 
         if __name__ == '__main__':
-            print(os.getpid())
-            print(os.getppid())
+            __test_helper__.record()
         '''))
+
+        test_pid = os.getpid()
 
         with env(QUICKEN_LOG=str(log_file_path)):
             with contained_children():
-                result = run_cli(
-                    [
-                        '-f',
-                        str(script_a),
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-
-            current_pid = str(os.getpid())
-            runner_pid_1, parent_pid_1 = result.stdout.decode('utf-8').split()
-            assert runner_pid_1 != current_pid
-            assert parent_pid_1 != current_pid
-
-            with chdir('a'):
-                with contained_children():
-                    result = run_cli(
-                        [
-                            '-f',
-                            script_a.name,
-                        ],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
+                with track_state() as run1:
+                    result = subprocess.run(
+                        ['quicken', '-f', str(script_a)]
                     )
 
-                runner_pid_2, parent_pid_2 = result.stdout.decode('utf-8').split()
-                assert runner_pid_2 != current_pid
-                assert parent_pid_2 != current_pid
-                assert runner_pid_1 != runner_pid_2
-                assert parent_pid_1 == parent_pid_2
+                assert result.returncode == 0
+                assert run1.pid != test_pid
+                assert run1.ppid != test_pid
+
+                with chdir('a'):
+                    with track_state() as run2:
+                        result = subprocess.run(
+                            ['quicken', '-f', script_a.name]
+                        )
+
+                assert result.returncode == 0
+                assert run2.pid != test_pid
+                assert run2.ppid != test_pid
+                assert run1.pid != run2.pid
+                assert run1.ppid == run2.ppid

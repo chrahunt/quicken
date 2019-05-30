@@ -80,7 +80,7 @@ class SignalProxy:
             signal.signal(sig, self._handle_signal)
 
     def _handle_signal(self, num, _frame):
-        # Be sure all functions called in this method are re-entrant.
+        # XXX: Be sure all functions called in this method are re-entrant.
         os.kill(self._pid, num)
         # The SIGT* functions are handled differently, stopping the current
         # process and the handler process if received.

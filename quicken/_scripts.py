@@ -3,44 +3,46 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 import sys
 
-try:
-    # Faster to import than hashlib if _sha512 is present. See e.g. python/cpython#12742
-    from _sha512 import sha512 as _sha512
-except ImportError:
-    from hashlib import sha512 as _sha512
-
+from .lib._imports import sha512
+from .lib._logging import default_configuration
 from .lib._typing import MYPY_CHECK_RUNNING
 
-
 if MYPY_CHECK_RUNNING:
-    from typing import List
+    from typing import Any, Dict, List, Tuple
 
 
-def get_script_details(module: str, func: str):
+logger = logging.getLogger(__name__)
+
+
+def get_script_details(module: str, func: str) -> Tuple[str, Dict[str, Any]]:
     """
     Returns:
-        digest, reload_criteria
+        (digest, reload_criteria)
     """
     main = sys.modules['__main__'].__file__
     bin_dir = os.path.dirname(main)
+    # Data used for calculating server key.
     key = {
         'dir': bin_dir,
         'module': module,
         'func': func,
     }
     text = json.dumps(key, sort_keys=True, separators=(',', ':'))
-    digest = _sha512(text.encode('utf-8')).hexdigest()
+    digest = sha512(text.encode('utf-8')).hexdigest()
     result = os.stat(main)
+    # Keys used for determining if server reload required.
     key['mtime'] = result[stat.ST_MTIME]
     key['ctime'] = result[stat.ST_CTIME]
+    logger.debug('Digest: %s', key, digest)
     return digest, key
 
 
-def get_nested_attr(o, parts):
+def get_nested_attr(o: Any, parts: List[str]) -> Any:
     for name in parts:
         o = getattr(o, name)
     return o
@@ -134,8 +136,6 @@ def wrapper_script(callback):
         helper = ScriptHelper(parts)
         return callback(helper)
 
-    # Required
-    module_context = {
-        '__path__': '',
-    }
+    default_configuration()
+
     return get_attribute_accumulator(inner)

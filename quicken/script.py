@@ -26,7 +26,6 @@ __all__ = []
 def callback(helper):
     from .lib import quicken
 
-    log_file = os.environ.get('QUICKEN_LOG')
     # 1 day
     DEFAULT_IDLE_TIMEOUT = 86400
     idle_timeout = float(
@@ -35,7 +34,6 @@ def callback(helper):
 
     wrapper = quicken(
         helper.name,
-        log_file=log_file,
         reload_server=operator.ne,
         user_data=helper.metadata,
         server_idle_timeout=idle_timeout,

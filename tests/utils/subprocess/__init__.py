@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 
@@ -11,27 +12,21 @@ class _State:
     def __init__(self, path):
         self._path = path
         self._parsed = False
-        self._pid = None
-        self._ppid = None
 
-    @property
-    def ppid(self):
+    def __getattr__(self, name):
         if not self._parsed:
             self._parse()
-        return self._ppid
-
-    @property
-    def pid(self):
-        if not self._parsed:
-            self._parse()
-        return self._pid
+        try:
+            return self._data[name]
+        except KeyError:
+            raise AttributeError(name)
 
     def _parse(self):
         self._parsed = True
         text = self._path.read_text(encoding='utf-8')
-        pid, ppid = [int(v) for v in text.split()]
-        self._pid = int(pid)
-        self._ppid = int(ppid)
+        if not text:
+            raise RuntimeError('subprocess did not write to state file')
+        self._data = json.loads(text)
 
 
 @contextmanager
@@ -54,5 +49,9 @@ def track_state():
     with tempfile.NamedTemporaryFile() as f:
         state_file = Path(f.name)
         with _add_test_helper():
-            with env(TEST_STATE=str(state_file)):
-                yield _State(state_file)
+            with env(_TEST_STATE=str(state_file)):
+                state = _State(state_file)
+                yield state
+
+        # In case it wasn't already retrieved by the user.
+        state._parse()

@@ -1,6 +1,5 @@
 import logging
 import logging.config
-import os
 import subprocess
 import sys
 import threading
@@ -22,7 +21,7 @@ try:
     from ch.debug.gdb_get_trace import get_process_stack
 except ImportError:
     if sys.platform.startswith('win'):
-        def get_process_stack(pid):
+        def get_process_stack(_pid):
             raise NotImplementedError('Not implemented on Windows')
     else:
         raise
@@ -31,22 +30,28 @@ from .utils import isolated_filesystem
 from .utils.pytest import current_test_name
 from .utils.process import disable_child_tracking, kill_children
 
-from quicken.lib._logging import UTCFormatter
+from quicken.lib._logging import DefaultSingleLineLogFormatter
 
 
-log_file_format = 'logs/{test_case}.log'
+log_dir = Path(__file__).parent.parent / 'logs'
 
 
 pytest_plugins = "tests.plugins.timeout", "tests.plugins.strace"
 
 
-def get_log_file(test_name):
-    return Path(log_file_format.format(test_case=test_name)).absolute()
+logger = logging.getLogger(__name__)
+
+
+def get_log_file(test_name=None):
+    if not test_name:
+        test_name = current_test_name()
+
+    return log_dir / f'{test_name}.log'
 
 
 @pytest.fixture
 def log_file_path():
-    return get_log_file(current_test_name())
+    return get_log_file()
 
 
 def pytest_runtest_setup(item):
@@ -58,63 +63,22 @@ def pytest_runtest_setup(item):
             record.test_name = current_test_name()
             return True
 
-    class PidFilter(logging.Filter):
-        def filter(self, record):
-            record.pid = os.getpid()
-            return True
-
     class TidFilter(logging.Filter):
         def filter(self, record):
             record.tid = gettid()
             return True
 
-    logging.config.dictConfig({
-        'version': 1,
-        'disable_existing_loggers': False,
-        'filters': {
-            'test_name': {
-                '()': TestNameAdderFilter,
-                'name': 'test_name',
-            },
-            'pid': {
-                '()': PidFilter,
-                'name': 'pid',
-            },
-            'tid': {
-                '()': TidFilter,
-                'name': 'tid',
-            }
-        },
-        'formatters': {
-            'default': {
-                '()': UTCFormatter,
-                'format': '#### [{asctime}][{levelname}][{pid}->{tid}][{test_name}->{name}]\n    {message}',
-                'style': '{',
-            }
-        },
-        'handlers': {
-            'file': {
-                '()': 'logging.FileHandler',
-                'level': 'DEBUG',
-                'filename': str(path),
-                'filters': ['test_name', 'tid', 'pid'],
-                'encoding': 'utf-8',
-                'formatter': 'default',
-            }
-        },
-        'root': {
-            'filters': ['test_name', 'tid', 'pid'],
-            'handlers': ['file'],
-            'level': 'DEBUG',
-        }
-    })
+    root_logger = logging.getLogger('')
+    root_logger.addFilter(TestNameAdderFilter())
+    root_logger.addFilter(TidFilter())
+    root_logger.setLevel(logging.DEBUG)
 
+    formatter = DefaultSingleLineLogFormatter(['process'])
+    handler = logging.FileHandler(path, encoding='utf-8')
+    handler.setFormatter(formatter)
+    root_logger.addHandler(handler)
 
-def pytest_collection_modifyitems(config, items):
-    global log_file_format
-    log_file_format = str(Path(log_file_format).absolute())
-    # TODO: Use log_file as log_file_format
-    # config.config.log_file
+    logger.info('---------- Starting test ----------')
 
 
 @pytest.hookimpl

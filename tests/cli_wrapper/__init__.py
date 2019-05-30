@@ -33,29 +33,35 @@ def test_something():
         ...
 ```
 """
-from pathlib import Path
+import logging
 
 from quicken.lib import quicken
 
-from ..utils.pytest import current_test_name
+from ..conftest import get_log_file
 from ..utils import preserved_signals
+from ..utils.pytest import current_test_name
 
 
-log_dir = Path('logs').absolute()
+_default_name = object()
 
 
-def cli_factory(*args, **kwargs):
+def cli_factory(name=_default_name, **kwargs):
     """Test function wrapper.
     """
     # Consistent log file naming for server output.
-    log_file = log_dir / f'{current_test_name()}-server.log'
-    kwargs['log_file'] = log_file
+    handler = logging.FileHandler(str(get_log_file()))
+    quicken_logger = logging.getLogger('quicken')
+    quicken_logger.addHandler(handler)
+
+    if name is _default_name:
+        name = current_test_name()
+
     # Preserve normal signal handlers in callback function so it does not bleed
     # into forked processes between multiple tests.
     def wrapper(func):
         def execute_with_preserved_signals():
             with preserved_signals():
                 return func()
-        return quicken(*args, **kwargs)(execute_with_preserved_signals)
+        return quicken(name, **kwargs)(execute_with_preserved_signals)
 
     return wrapper

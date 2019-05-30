@@ -40,24 +40,23 @@ report('start cli load')
 import argparse
 import ast
 import importlib.util
+import logging
 import os
 import stat
 import sys
 
-try:
-    # Faster to import than hashlib if _sha512 is present. See e.g. python/cpython#12742
-    from _sha512 import sha512 as _sha512
-except ImportError:
-    from hashlib import sha512 as _sha512
-
 from functools import partial
 
-
+from .lib._imports import sha512
+from .lib._logging import default_configuration
 from .lib._typing import MYPY_CHECK_RUNNING
 from .lib._xdg import RuntimeDir
 
 if MYPY_CHECK_RUNNING:
     from typing import List
+
+
+logger = logging.getLogger(__name__)
 
 
 report('end cli load dependencies')
@@ -71,10 +70,8 @@ def run(name, metadata, callback):
     def reload(old_data, new_data):
         return old_data != new_data
 
-    log_file = os.environ.get('QUICKEN_LOG')
-
     decorator = quicken(
-        name, reload_server=reload, log_file=log_file, user_data=metadata
+        name, reload_server=reload, user_data=metadata
     )
 
     return decorator(callback)()
@@ -110,9 +107,9 @@ def is_main(node):
         return False
 
     if isinstance(left, ast.Str):
-        main = left
+        str_part = left
     elif isinstance(right, ast.Str):
-        main = right
+        str_part = right
     else:
         return False
 
@@ -122,21 +119,21 @@ def is_main(node):
     if not isinstance(name.ctx, ast.Load):
         return False
 
-    if main.s != '__main__':
+    if str_part.s != '__main__':
         return False
 
     return True
 
 
-# XXX: May be nicer to use a Loader implemented for our purpose.
+# XXX: May be nicer to use a Loader
 def parse_file(path: str):
     """
-    Given a path, parse it into a
-    Parse a file into prelude and main sections.
+    Call "if __name__ == '__main__'" a "main_check".
 
-    We assume that the "prelude" is anything before the first "if __name__ == '__main__'".
+    Parse a file into pre-main_check (prelude) and post-main_check (main) callables.
 
-    Returns annotated code objects as expected.
+    The returned functions share context, so executing prelude then main should
+    let main see all the things defined by prelude.
     """
     path = os.path.abspath(path)
     with open(path, 'rb') as f:
@@ -152,11 +149,11 @@ def parse_file(path: str):
     prelude = ast.copy_location(
         ast.Module(root.body[:i]), root
     )
-    main = ast.copy_location(
+    main_part = ast.copy_location(
         ast.Module(root.body[i:]), root
     )
     prelude_code = compile(prelude, filename=path, dont_inherit=True, mode="exec")
-    main_code = compile(main, filename=path, dont_inherit=True, mode="exec")
+    main_code = compile(main_part, filename=path, dont_inherit=True, mode="exec")
     # Shared context.
     context = {
         '__name__': '__main__',
@@ -178,10 +175,12 @@ class PathHandler:
         self._args = args
 
         real_path = os.path.realpath(path)
-        digest = _sha512(path.encode('utf-8')).hexdigest()
+        digest = sha512(real_path.encode('utf-8')).hexdigest()
         self._name = f'quicken.file.{digest}'
 
         stat_result = os.stat(real_path)
+
+        logger.debug('Digest: %s', digest)
 
         self._metadata = {
             'path': path,
@@ -189,6 +188,8 @@ class PathHandler:
             'ctime': stat_result[stat.ST_CTIME],
             'mtime': stat_result[stat.ST_MTIME],
         }
+
+        logger.debug('Metadata: %s', self._metadata)
 
     @property
     def argv(self):
@@ -214,7 +215,8 @@ class PathHandler:
 
 # Adapted from https://github.com/python/cpython/blob/e42b705188271da108de42b55d9344642170aa2b/Lib/runpy.py#L101
 # with changes:
-# * we do not actually want to retrieve the module code yet
+# * we do not actually want to retrieve the module code yet (defeats the purpose
+#   of our script)
 def _get_module_details(mod_name, error=ImportError):
     if mod_name.startswith("."):
         raise error("Relative module names not supported")
@@ -227,9 +229,14 @@ def _get_module_details(mod_name, error=ImportError):
             # If the parent or higher ancestor package is missing, let the
             # error be raised by find_spec() below and then be caught. But do
             # not allow other errors to be caught.
-            if e.name is None or (e.name != pkg_name and
-                    not pkg_name.startswith(e.name + ".")):
+            if (
+                e.name is None or (
+                    e.name != pkg_name and
+                    not pkg_name.startswith(e.name + ".")
+                )
+            ):
                 raise
+
         # Warn if the module has already been imported under its normal name
         existing = sys.modules.get(mod_name)
         if existing is not None and not hasattr(existing, "__path__"):
@@ -290,7 +297,6 @@ class ModuleHandler:
         report('start ModuleHandler')
         self._module_name, self._spec = _get_module_details(module_name)
 
-
     def main(self):
         loader = self._spec.loader
         try:
@@ -302,7 +308,6 @@ class ModuleHandler:
 
 
 def parse_args(args=None):
-    #args = preprocess_args(args)
     parser = argparse.ArgumentParser(
         description='''
         Invoke Python commands in an application server.
@@ -328,6 +333,9 @@ def parse_args(args=None):
 
 def main():
     report('start main()')
+
+    default_configuration()
+
     parser, args = parse_args()
     if args.f:
         path = args.f
