@@ -29,8 +29,8 @@ from ..utils import (
 from ..utils.path import get_bound_path
 from ..utils.process import contained_children
 from ..utils.pytest import non_windows
-from ..utils.subprocess import track_state
-from ..utils.subprocess.__test_helper__ import record
+from ..utils.subprocess_helper import track_state
+from ..utils.subprocess_helper.__test_helper__ import record
 from ..utils.watch import wait_for_create
 
 
@@ -96,13 +96,30 @@ def test_quicken_is_importing_is_set():
         assert runner() == 0
 
 
-@pytest.mark.skip
 def test_quicken_is_importing_not_set_when_bypassed():
     # Given a function is decorated
     # And bypass_server return True
     # When the main provider function is executed
     # Then quicken.is_importing should be False
-    ...
+    import quicken
+
+    def bypass_server():
+        return True
+
+    @cli_factory(bypass_server=bypass_server)
+    def runner():
+        assert not quicken.is_importing
+
+        def inner():
+            assert not quicken.is_importing
+            return 0
+
+        return inner
+
+    assert not quicken.is_importing
+
+    with contained_children():
+        assert runner() == 0
 
 
 # This may time out if not all references to the std streams are closed in
@@ -744,7 +761,6 @@ def test_server_reload_when_library_version_changes():
             assert run2.ppid != test_pid
 
 
-@pytest.mark.xfail(reason='bypassed function does not return 0 if main returns None')
 def test_server_bypass_ok():
     # Given the server_bypass decorator parameter is True
     # And the server is up
@@ -758,6 +774,7 @@ def test_server_bypass_ok():
     def runner():
         def inner():
             record()
+            return 0
 
         return inner
 
@@ -770,40 +787,13 @@ def test_server_bypass_ok():
         assert run1.pid == test_pid
 
 
-@pytest.mark.xfail(reason='does not fail fast')
-def test_log_file_unwritable_fails_fast():
-    # Given a log_file path pointing to a location that is not writable
-    # And the server is not up
-    # When the decorated function is executed
-    # Then an exception should be raised in the parent
-    # And the server must not be up
-    with isolated_filesystem() as path:
-        log_path = Path(path) / 'log.txt'
-        log_path.touch()
-
-        @cli_factory(log_file=str(log_path))
-        def runner():
-            def inner():
-                pass
-
-            return inner
-
-        log_path.chmod(stat.S_IRUSR)
-
-        with contained_children():
-            with pytest.raises(QuickenError) as e:
-                runner()
-
-        assert str(log_path) in str(e)
-
-
-@pytest.mark.xfail(reason='wrong error raised')
 def test_unwritable_runtime_dir_raises_exception():
     # Given a runtime_dir path pointing to a location that is not writable
     # And the server is not up
     # When the decorated function is executed
     # Then the server should fail to come up
-    # And an exception should be raised
+    # And it should raise a QuickenError with message 'runtime directory \'{}\'
+    #  is not writable'
     with isolated_filesystem() as path:
         @cli_factory(runtime_dir_path=path)
         def runner():
@@ -818,39 +808,16 @@ def test_unwritable_runtime_dir_raises_exception():
             with pytest.raises(QuickenError) as e:
                 runner()
 
-
-@pytest.mark.xfail(reason='wrong error raised')
-def test_unwritable_socket_file_raises_exception():
-    # Given a runtime_dir path pointing to a directory with an unwritable
-    #  'socket' file
-    # And the server is not up
-    # When the decorated function is executed
-    # Then the server should fail to come up
-    # And it should raise a QuickenError with message 'could not write socket
-    #  file' and the path.
-    with isolated_filesystem() as path:
-        @cli_factory(runtime_dir_path=path)
-        def runner():
-            def inner():
-                pass
-
-            return inner
-
-        (Path(path) / socket_name).touch(mode=stat.S_IRUSR)
-
-        with contained_children():
-            with pytest.raises(QuickenError):
-                runner()
+        assert f'{path} must have permissions 700' in str(e)
 
 
-@pytest.mark.xfail(reason='wrong error raised')
 def test_server_not_creating_socket_file_raises_exception(mocker):
     # Given the server is not up
     # And the server has been stubbed out to not create the socket file
     # When the decorated function is executed
     # Then it should time out waiting for the socket file to be created and
     #  raise a QuickenError with message 'timed out connecting to server'
-    mocker.patch('quicken._server.run')
+    mocker.patch('quicken.lib._server.run')
     @cli_factory()
     def runner():
         def inner():
@@ -863,7 +830,6 @@ def test_server_not_creating_socket_file_raises_exception(mocker):
             runner()
 
 
-@pytest.mark.xfail(reason='wrong error raised')
 def test_server_not_listening_on_socket_file_raises_exception(mocker):
     # Given the server is not up
     # And the server has been stubbed out to bind to the socket file but not
@@ -871,7 +837,7 @@ def test_server_not_listening_on_socket_file_raises_exception(mocker):
     # When the decorated function is executed
     # Then it should raise a QuickenError with message 'failed to connect to
     #  server'
-    run_function = mocker.patch('quicken._server.run')
+    run_function = mocker.patch('quicken.lib._server.run')
 
     def fake_listener(*_args, **_kwargs):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -880,7 +846,6 @@ def test_server_not_listening_on_socket_file_raises_exception(mocker):
     run_function.side_effect = fake_listener
 
     with isolated_filesystem() as path:
-
         @cli_factory(runtime_dir_path=path)
         def runner():
             def inner():
@@ -893,12 +858,13 @@ def test_server_not_listening_on_socket_file_raises_exception(mocker):
                 runner()
 
 
-@pytest.mark.skip(reason='client currently hangs')
+@pytest.mark.skip
+@pytest.mark.timeout(5)
 def test_runner_fails_when_communicating_to_stopped_server():
     # Given a server that is running but has received SIGSTOP
     # When the decorated function is executed.
     # Then the client should not hang
-    # And should raise a QuickenError with message 'failed to connect to server'
+    # And should raise a QuickenError with message 'failed to communicate with server'
     with isolated_filesystem() as path:
 
         @cli_factory(runtime_dir_path=path)

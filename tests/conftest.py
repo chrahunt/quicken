@@ -1,13 +1,9 @@
 import logging
 import logging.config
-import subprocess
 import sys
 import threading
-import venv
 
-from contextlib import ExitStack
 from pathlib import Path
-from typing import List
 
 import pytest
 
@@ -26,7 +22,7 @@ except ImportError:
     else:
         raise
 
-from .utils import isolated_filesystem
+from .utils import venv_factory
 from .utils.pytest import current_test_name
 from .utils.process import disable_child_tracking, kill_children
 
@@ -54,7 +50,11 @@ def log_file_path():
     return get_log_file()
 
 
+_last_handler = None
+
+
 def pytest_runtest_setup(item):
+    global _last_handler
     path = get_log_file(item.name)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -77,6 +77,10 @@ def pytest_runtest_setup(item):
     handler = logging.FileHandler(path, encoding='utf-8')
     handler.setFormatter(formatter)
     root_logger.addHandler(handler)
+
+    if _last_handler:
+        root_logger.removeHandler(_last_handler)
+    _last_handler = handler
 
     logger.info('---------- Starting test ----------')
 
@@ -103,23 +107,7 @@ def pytest_timeout_timeout(item, report):
     kill_children()
 
 
-class Venv:
-    def __init__(self, path: Path):
-        self.path = path
-
-    def run(self, cmd: List[str], *args, **kwargs):
-        interpreter = Path(self.path) / 'bin' / 'python'
-        cmd.insert(0, str(interpreter))
-        return subprocess.run(cmd, *args, **kwargs)
-
-
 @pytest.fixture
 def virtualenvs():
-    class Provider:
-        def create(self):
-            path = stack.enter_context(isolated_filesystem())
-            venv.create(path, symlinks=True, with_pip=True)
-            return Venv(path)
-
-    with ExitStack() as stack:
-        yield Provider()
+    with venv_factory() as factory:
+        yield factory

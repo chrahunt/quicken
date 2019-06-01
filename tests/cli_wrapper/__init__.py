@@ -33,12 +33,11 @@ def test_something():
         ...
 ```
 """
-import logging
-
 from quicken.lib import quicken
+from quicken.lib._logging import default_configuration, reset_configuration
 
 from ..conftest import get_log_file
-from ..utils import preserved_signals
+from ..utils import env, preserved_signals
 from ..utils.pytest import current_test_name
 
 
@@ -49,10 +48,6 @@ def cli_factory(name=_default_name, **kwargs):
     """Test function wrapper.
     """
     # Consistent log file naming for server output.
-    handler = logging.FileHandler(str(get_log_file()))
-    quicken_logger = logging.getLogger('quicken')
-    quicken_logger.addHandler(handler)
-
     if name is _default_name:
         name = current_test_name()
 
@@ -62,6 +57,15 @@ def cli_factory(name=_default_name, **kwargs):
         def execute_with_preserved_signals():
             with preserved_signals():
                 return func()
-        return quicken(name, **kwargs)(execute_with_preserved_signals)
+
+        def logging_setup_wrapper():
+            with env(QUICKEN_LOG=str(get_log_file())):
+                default_configuration()
+            try:
+                return quicken(name, **kwargs)(execute_with_preserved_signals)()
+            finally:
+                reset_configuration()
+
+        return logging_setup_wrapper
 
     return wrapper

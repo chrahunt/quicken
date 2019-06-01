@@ -34,8 +34,6 @@ it makes sense:
 """
 from __future__ import annotations
 
-from ._timings import report
-report('start cli load')
 
 import argparse
 import ast
@@ -47,6 +45,7 @@ import sys
 
 from functools import partial
 
+from ._timings import report
 from .lib._imports import sha512
 from .lib._logging import default_configuration
 from .lib._typing import MYPY_CHECK_RUNNING
@@ -59,19 +58,17 @@ if MYPY_CHECK_RUNNING:
 logger = logging.getLogger(__name__)
 
 
-report('end cli load dependencies')
-
-
-def run(name, metadata, callback):
+def run(name, metadata, callback, reload_callback=None):
     report('start quicken load')
     from .lib import quicken
     report('end quicken load')
 
-    def reload(old_data, new_data):
-        return old_data != new_data
+    if reload_callback is None:
+        def reload_callback(old_data, new_data):
+            return old_data != new_data
 
     decorator = quicken(
-        name, reload_server=reload, user_data=metadata
+        name, reload_server=reload_callback, user_data=metadata
     )
 
     return decorator(callback)()
@@ -166,6 +163,12 @@ def parse_file(path: str):
 
 class PathHandler:
     def __init__(self, path, args):
+        """
+        Args:
+            path: path to the file to process
+            args: arguments to be used for the sub-process
+        Raises:
+        """
         report('start handle_path()')
         self._path_arg = path
 
@@ -195,22 +198,30 @@ class PathHandler:
     def argv(self):
         return [self._path_arg, *self._args]
 
-    @property
-    def name(self):
-        return self._name
+    def main(self):
+        report('start file parsing')
+        prelude_code, main_code = parse_file(self._path)
+        report('end file parsing')
+        # Execute everything before if __name__ == '__main__':
+        report('start prelude execute')
+        prelude_code()
+        report('end prelude execute')
+        # Pass main back to be executed by the server.
+        return main_code
 
     @property
     def metadata(self):
         return self._metadata
 
-    def main(self):
-        report('start file processing')
-        prelude_code, main_code = parse_file(self._path)
-        # Execute everything before if __name__ == '__main__':
-        prelude_code()
-        report('end file processing')
-        # Pass main back to be executed by the server.
-        return main_code
+    @property
+    def name(self):
+        return self._name
+
+    def reload_callback(self, old_data, new_data):
+        return (
+            old_data['ctime'] != new_data['ctime'] or
+            old_data['mtime'] != new_data['mtime']
+        )
 
 
 # Adapted from https://github.com/python/cpython/blob/e42b705188271da108de42b55d9344642170aa2b/Lib/runpy.py#L101
@@ -334,24 +345,31 @@ def parse_args(args=None):
 def main():
     report('start main()')
 
-    default_configuration()
-
     parser, args = parse_args()
+
+    try:
+        default_configuration()
+    except PermissionError:
+        parser.error(f'QUICKEN_LOG ({os.environ["QUICKEN_LOG"]}) is not writable')
+
     if args.f:
         path = args.f
-        if not os.path.exists(path):
+        if not os.access(path, os.R_OK):
+            parser.error(f'Cannot read {path}')
+
+        try:
+            handler = PathHandler(path, args.args)
+        except FileNotFoundError:
             parser.error(f'{path} does not exist')
-        handler = PathHandler(path, args.args)
+
     #elif args.m:
     #    # We do not have a good strategy for avoiding import of the parent module
     #    # so for now just reject.
     #    if '.' in args.m:
     #        parser.error('Sub-modules are not supported')
     #    handler = ModuleHandler(args.m, args.args)
-    else:
-        parser.print_usage(sys.stderr)
-        sys.exit(1)
 
+    # noinspection PyUnboundLocalVariable
     sys.argv = handler.argv
 
     if args.ctl:
@@ -378,4 +396,6 @@ def main():
                 sys.stderr.write('Unknown action')
                 sys.exit(1)
     else:
-        sys.exit(run(handler.name, handler.metadata, handler.main))
+        sys.exit(
+            run(handler.name, handler.metadata, handler.main, handler.reload_callback)
+        )

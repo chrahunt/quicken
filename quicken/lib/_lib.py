@@ -94,7 +94,10 @@ def server_runner_wrapper(
     except TypeError as e:
         raise QuickenError('user_data must be serializable') from e
 
-    runtime_dir = RuntimeDir(name, runtime_dir_path)
+    try:
+        runtime_dir = RuntimeDir(name, runtime_dir_path)
+    except RuntimeError as e:
+        raise QuickenError(e.args[0]) from None
 
     set_fd_sharing_base_path_fd(runtime_dir.fileno())
 
@@ -114,7 +117,6 @@ def server_runner_wrapper(
                 need_start = True
 
         if need_start:
-            logger.info('Starting server')
             set_importing(True)
             report('starting user code import')
             main = main_provider()
@@ -123,7 +125,11 @@ def server_runner_wrapper(
             report('starting server')
             manager.start_server(main, server_idle_timeout, user_data)
             report('connecting to server')
-            client = manager.connect()
+            try:
+                client = manager.connect()
+            except ConnectionFailed:
+                logger.exception('failed to connect to server')
+                raise QuickenError('failed to connect to server')
 
     report('connected to server')
     proxy = SignalProxy()
@@ -142,7 +148,8 @@ def server_runner_wrapper(
 
     # At this point user code is running.
     logger.debug('Waiting for process to finish')
-    response = client.send(Request(RequestTypes.wait_process_done, None))
+    req = Request(RequestTypes.wait_process_done, None)
+    response = client.send(req)
     client.close()
     return response.contents
 

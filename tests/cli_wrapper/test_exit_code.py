@@ -62,6 +62,7 @@ def test_exit_code_propagated_on_os__exit():
     @cli_factory(current_test_name())
     def runner():
         def inner():
+            # noinspection PyProtectedMember
             os._exit(4)
         return inner
 
@@ -121,6 +122,7 @@ def test_exit_code_propagated_on_atexit_os__exit():
     def runner():
         def inner():
             def func():
+                # noinspection PyProtectedMember
                 os._exit(3)
             atexit.register(func)
         return inner

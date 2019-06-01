@@ -22,6 +22,7 @@ class _State:
             raise AttributeError(name)
 
     def _parse(self):
+
         self._parsed = True
         text = self._path.read_text(encoding='utf-8')
         if not text:

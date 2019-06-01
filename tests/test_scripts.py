@@ -2,21 +2,17 @@
 """
 import os
 import subprocess
-import string
-import sys
 
-from contextlib import contextmanager
 from pathlib import Path
-from textwrap import dedent
 
 import pytest
 
 from quicken._scripts import get_attribute_accumulator, ScriptHelper
 
-from .utils import env, isolated_filesystem, kept
+from .utils import isolated_filesystem, local_module, write_text
 from .utils.process import active_children, contained_children
 from .utils.pytest import non_windows
-from .utils.subprocess import track_state
+from .utils.subprocess_helper import track_state
 
 
 def test_attribute_accumulator():
@@ -33,20 +29,6 @@ def test_attribute_accumulator():
     get_attribute_accumulator(check).__init__.hello._.world()
 
     assert result == ['__init__', 'hello', '_', 'world']
-
-
-@contextmanager
-def local_module():
-    with isolated_filesystem() as path:
-        with kept(sys, 'path'):
-            sys.path.append(str(path))
-            with kept(sys, 'modules'):
-                yield
-
-
-def write_text(path: Path, text: str, **params):
-    new_text = string.Template(dedent(text)).substitute(params)
-    path.write_text(new_text)
 
 
 def test_helper_runs_module_and_func():
@@ -258,6 +240,15 @@ def test_script_idle_timeout():
     # And QUICKEN_IDLE_TIMEOUT is set to a nonzero value
     # Then the server will shut down after that long without
     #  any requests.
+    ...
+
+
+@pytest.mark.skip
+def test_log_file_unwritable_fails_fast_script():
+    # Given a QUICKEN_LOG path pointing to a location that is not writable
+    # And the server is not up
+    # When the decorated function is executed
+    # Then an exception should be indicated
     ...
 
 

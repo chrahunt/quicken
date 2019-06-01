@@ -131,6 +131,13 @@ To stop the server: `quicken --ctl stop -f script.py`
 
 The server is identified using the full path to the script.
 
+#### Differences
+
+1. `__file__` is set to the full, resolved path to the file provided to `-f`, unlike
+   Python which sets it to the path provided on the command line. This is so the
+   code before `if __name__ == '__main__'` and the code after it see the same path
+   even if the user changes directories or the path provided to the command.
+
 # Why
 
 Python command-line tools can feel slow. There are tricks that can be used to

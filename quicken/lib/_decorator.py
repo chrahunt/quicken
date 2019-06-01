@@ -46,7 +46,9 @@ def quicken(
         server_idle_timeout: time in seconds after which the server will shut
             down if no requests are received or being processed.
         bypass_server: if this function returns True then we run the entry point
-            directly instead of trying to start or use an application server.
+            directly instead of trying to start or use an application server. In
+            this case the return value may be exactly the same as the wrapped function
+            instead of an integer exit code.
         reload_server: if this function returns True then we start a new server
             before running the entry point function - use it to check for
             updates for example. Receives the old and new user_data objects.

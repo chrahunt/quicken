@@ -147,11 +147,14 @@ def _run_server(
     loop = asyncio.new_event_loop()
 
     def print_exception(_loop, context):
-        exc = context['exception']
-        formatted_exc = ''.join(
-            traceback.format_exception(type(exc), exc, exc.__traceback__))
+        exc = context.get('exception')
+        if exc:
+            formatted_exc = ''.join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__))
+        else:
+            formatted_exc = '<no exception>'
         logger.error(
-            'Error in event loop: %s\n%s', context['message'], formatted_exc)
+            'Error in event loop: %r\n%s', context, formatted_exc)
 
     loop.set_exception_handler(print_exception)
 
@@ -347,6 +350,7 @@ class ProcessConnectionHandler(ConnectionHandler):
 
     def _start_callback(self, process_state) -> AsyncProcess:
         def setup_child():
+            # XXX: Should close open fds (except the one for the sentinel).
             ProcessState.apply_to_current_process(process_state)
             try:
                 sys.exit(self._callback())
@@ -473,8 +477,8 @@ class Server:
                     async with self._shutdown_accept_cv:
                         self._shutdown_accept_cv.notify()
                 return
-
-            self._handle_connection(connection)
+            else:
+                self._handle_connection(connection)
 
     def _handle_connection(self, connection: AsyncConnectionAdapter):
         self._idle_handle_connect()

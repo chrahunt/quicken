@@ -1,3 +1,5 @@
+"""Wait for file creation/deletion, for tests.
+"""
 import logging
 import signal
 import sys
