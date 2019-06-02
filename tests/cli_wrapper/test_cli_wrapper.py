@@ -312,13 +312,14 @@ def test_client_receiving_tstp_ttin_stops_itself():
     # Ensure that the test runner caller doesn't impact signal handling.
     signal.pthread_sigmask(signal.SIG_SETMASK, [])
 
-    test_signals = [signal.SIGTSTP, signal.SIGTTIN]
+    test_signals = {signal.SIGTSTP, signal.SIGTTIN}
+    resume_signal = signal.SIGUSR1
 
     @cli_factory(current_test_name())
     def runner():
         def inner():
             # Block signals we expect to receive
-            signal.pthread_sigmask(signal.SIG_BLOCK, test_signals)
+            signal.pthread_sigmask(signal.SIG_BLOCK, test_signals | {signal.SIGUSR1})
             # Save our pid so it is accessible to the test process, avoiding
             # any race conditions where the file may be empty.
             pid = os.getpid()
@@ -334,6 +335,10 @@ def test_client_receiving_tstp_ttin_stops_itself():
                 # Stop self to indicate success to test process.
                 os.kill(pid, signal.SIGSTOP)
 
+            logger.debug('Waiting for signal to exit')
+            # This is required otherwise we may exit while the test is checking
+            # for our status.
+            signal.sigwait({resume_signal})
             logger.debug('All signals received')
 
         return inner
@@ -382,6 +387,9 @@ def test_client_receiving_tstp_ttin_stops_itself():
                 logger.debug('Waiting for runner to resume')
                 wait_for(
                     lambda: runner_process.status() != psutil.STATUS_STOPPED)
+
+            # Resume runner process so it exits.
+            runner_process.send_signal(resume_signal)
 
             logger.debug('Waiting for client to finish')
             p.join()

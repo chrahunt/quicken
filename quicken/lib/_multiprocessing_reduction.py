@@ -28,7 +28,7 @@ def reduce_textio(obj: TextIO):
     that:
 
     * doesn't require authkey (but does require base path to be set which should
-      be in a secure folder
+      be in a secure folder)
     * doesn't require random unix socket (so when we import multiprocessing.connection
       we can stub out tempfile, saving 5ms).
     """
