@@ -6,8 +6,14 @@ from pathlib import Path
 
 import pytest
 
+# noinspection PyProtectedMember
 from quicken.lib._multiprocessing import run_in_process
-from quicken.lib._multiprocessing_reduction import set_fd_sharing_base_path_fd
+# noinspection PyProtectedMember
+from quicken.lib._multiprocessing_reduction import (
+    dumps,
+    loads,
+    set_fd_sharing_base_path_fd,
+)
 
 from .utils import isolated_filesystem
 from .utils.process import contained_children
@@ -35,8 +41,10 @@ def test_function_is_executed_in_separate_process():
 #  multiprocessing.
 def test_function_exception_is_reraised():
     message = 'example message'
+
     def runner():
         raise RuntimeError(message)
+
     with pytest.raises(RuntimeError) as exc_info:
         run_in_process(target=runner)
     assert message == exc_info.value.args[0]
@@ -44,24 +52,30 @@ def test_function_exception_is_reraised():
 
 def test_function_return_value_is_returned():
     value = 123
+
     def runner():
         return value
+
     result = run_in_process(target=runner)
     assert result == value
 
 
 def test_function_gets_args():
     arg = '123'
+
     def runner(s):
         return s
+
     result = run_in_process(target=runner, args=(arg,))
     assert result == arg
 
 
 def test_function_timeout_works():
     timeout = 0.5
+
     def runner():
         time.sleep(timeout * 2)
+
     with pytest.raises(TimeoutError):
         run_in_process(target=runner, timeout=timeout)
 
@@ -83,10 +97,11 @@ def test_function_detach_works():
 @pytest.mark.timeout(5)
 def test_textiowrapper_serialization_works():
     shared_text = 'hello\n'
+
     def acceptor():
         listener = multiprocessing.connection.Listener('socket')
         conn = listener.accept()
-        obj = conn.recv()
+        obj = loads(conn.recv())
         obj.write(shared_text)
         obj.flush()
         obj.close()
@@ -103,7 +118,7 @@ def test_textiowrapper_serialization_works():
         r_obj = os.fdopen(r, closefd=False)
         w_obj = os.fdopen(w, 'w', closefd=False)
         c = multiprocessing.connection.Client('socket')
-        c.send(w_obj)
+        c.send(dumps(w_obj))
         text = r_obj.readline()
         assert text == shared_text
         os.close(r)
