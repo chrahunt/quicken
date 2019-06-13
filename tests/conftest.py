@@ -22,7 +22,6 @@ except ImportError:
     else:
         raise
 
-from .utils import venv_factory
 from .utils.pytest import current_test_name
 from .utils.process import disable_child_tracking, kill_children
 
@@ -32,7 +31,7 @@ from quicken.lib._logging import DefaultSingleLineLogFormatter
 log_dir = Path(__file__).parent.parent / 'logs'
 
 
-pytest_plugins = "tests.plugins.timeout", "tests.plugins.strace"
+pytest_plugins = "tests.plugins.strace", "tests.plugins.timeout", "tests.plugins.venvs"
 
 
 logger = logging.getLogger(__name__)
@@ -107,7 +106,9 @@ def pytest_timeout_timeout(item, report):
     kill_children()
 
 
-@pytest.fixture
-def virtualenvs():
-    with venv_factory() as factory:
-        yield factory
+@pytest.fixture(scope='session')
+def quicken_venv(venvs):
+    venv = venvs.create()
+    quicken_path = Path(__file__).parent / '..'
+    venv.install(quicken_path)
+    yield venv

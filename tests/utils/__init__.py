@@ -4,13 +4,11 @@ import logging
 import os
 import signal
 import string
-import subprocess
 import sys
 import tempfile
 import textwrap
-import venv
 
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager
 from pathlib import Path
 from typing import ContextManager, List, TextIO, Tuple, Union
 
@@ -160,25 +158,3 @@ def local_module():
             sys.path.append(str(path))
             with kept(sys, 'modules'):
                 yield
-
-
-class Venv:
-    def __init__(self, path: Path):
-        self.path = path
-
-    def run(self, cmd: List[str], *args, **kwargs):
-        interpreter = Path(self.path) / 'bin' / 'python'
-        cmd.insert(0, str(interpreter))
-        return subprocess.run(cmd, *args, **kwargs)
-
-
-@contextmanager
-def venv_factory():
-    class Factory:
-        def create(self):
-            path = stack.enter_context(isolated_filesystem())
-            venv.create(path, symlinks=True, with_pip=True)
-            return Venv(path)
-
-    with ExitStack() as stack:
-        yield Factory()

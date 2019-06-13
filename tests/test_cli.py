@@ -18,7 +18,6 @@ from .utils import (
     isolated_filesystem,
     local_module,
     write_text,
-    venv_factory,
 )
 from .utils.process import contained_children
 from .utils.pytest import non_windows
@@ -276,22 +275,15 @@ def test_file_path_symlink_uses_resolved_path():
         assert stdout.read().strip() == str(script)
 
 
-@pytest.fixture(scope="module")
-def quicken_venv():
-    """Virtual environment with quicken installed.
-    """
-    with venv_factory() as factory:
-        venv = factory.create()
-        venv.run(['-m', 'pip', 'install', '--upgrade', 'pip'])
-        quicken_path = Path(__file__).parent / '..'
-        venv.run(['-m', 'pip', 'install', quicken_path])
-        path_paths = os.environ.get('PATH', '').split(os.pathsep)
-        path_paths.insert(0, str(venv.path / 'bin'))
-        with env(PATH=os.pathsep.join(path_paths)):
-            yield
+@pytest.fixture
+def quicken_script(quicken_venv):
+    path = os.environ['PATH']
+    bin_dir = quicken_venv.path / 'bin'
+    with env(PATH=f'{bin_dir}:{path}'):
+        yield
 
 
-def test_file_argv_set(log_file_path, quicken_venv):
+def test_file_argv_set(log_file_path, quicken_script):
     # Given a file `script.py`
     # sys.argv should start with `script.py` and be followed by any
     # other arguments
@@ -317,7 +309,7 @@ def test_file_argv_set(log_file_path, quicken_venv):
         assert result.stdout.decode('utf-8') == f'script.py\n{args[0]}\n'
 
 
-def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_venv):
+def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_script):
     # Given a file `a/script.py`
     # And a symlink `a/foo` pointing to `script.py`
     # And a server started from `a/script.py`
@@ -385,7 +377,7 @@ def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_ven
                     assert run1.ppid == run4.ppid
 
 
-def test_file_path_symlink_modified(log_file_path, quicken_venv):
+def test_file_path_symlink_modified(log_file_path, quicken_script):
     # Given a file `script.py`
     # And a symlink `foo` that points to it
     # And the server is already up, having been executed via the symlink
@@ -441,7 +433,7 @@ def test_file_path_symlink_modified(log_file_path, quicken_venv):
                 assert run1.ppid != run2.ppid
 
 
-def test_log_file_unwritable_fails_fast_cli(quicken_venv):
+def test_log_file_unwritable_fails_fast_cli(quicken_script):
     # Given a QUICKEN_LOG path pointing to a location that is not writable
     # When the CLI is executed
     # Then it should fail with a nonzero exit code and reasonable message
@@ -474,7 +466,7 @@ def test_log_file_unwritable_fails_fast_cli(quicken_venv):
             assert 'not writable' in stderr
 
 
-def test_script_file_unreadable_fails_with_error(quicken_venv):
+def test_script_file_unreadable_fails_with_error(quicken_script):
     # Given a script file that is not readable
     # When the CLI is executed
     # Then it should fail with a nonzero exit code and reasonable message

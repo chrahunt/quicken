@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import json
 import os
 import tempfile
 
 from contextlib import contextmanager
 from pathlib import Path
+from typing import ContextManager
 
 from .. import env
 
@@ -21,8 +24,20 @@ class _State:
         except KeyError:
             raise AttributeError(name)
 
-    def _parse(self):
+    def assert_unrelated_to_current_process(self):
+        pid = os.getpid()
+        assert pid != self.pid
+        assert pid != self.ppid
 
+    def assert_unrelated_to(self, other: _State):
+        assert self.pid != other.pid
+        assert self.ppid != other.ppid
+
+    def assert_same_parent_as(self, other: _State):
+        assert self.pid != other.pid
+        assert self.ppid == other.ppid
+
+    def _parse(self):
         self._parsed = True
         text = self._path.read_text(encoding='utf-8')
         if not text:
@@ -41,7 +56,7 @@ def _add_test_helper():
 
 
 @contextmanager
-def track_state():
+def track_state() -> ContextManager[_State]:
     """Helper for getting state from a sub-process. The convention
     is the sub-process should write data to TEST_STATE:
 
