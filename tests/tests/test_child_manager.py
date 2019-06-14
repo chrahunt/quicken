@@ -1,11 +1,12 @@
 import multiprocessing
+import signal
 
 from ctypes import c_int
 from multiprocessing.sharedctypes import RawArray
 
 import pytest
 
-from ..utils.process import contained_children, kill_children
+from ..utils.process import active_children, contained_children, kill_children
 from ..utils.pytest import non_windows
 
 
@@ -34,3 +35,21 @@ def test_child_manager_handles_multiple_children():
 
     with contained_children() as manager:
         target(0, 0)
+
+
+@pytest.mark.timeout(5, callback=kill_children)
+def test_child_manager_shows_children():
+    def wait():
+        signal.pause()
+
+    with contained_children():
+        p = multiprocessing.Process(target=wait)
+        p.daemon = True
+        p.start()
+
+        children = active_children()
+        assert len(children) == 1, f'Expected [{p.pid}]'
+        child = children[0]
+        assert child.pid == p.pid
+
+    p.join()

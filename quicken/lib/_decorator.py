@@ -7,7 +7,6 @@ import sys
 from functools import wraps
 
 from ._typing import MYPY_CHECK_RUNNING
-from .._timings import report
 
 if MYPY_CHECK_RUNNING:
     from typing import Callable, Optional
@@ -20,7 +19,6 @@ def quicken(
     # /,
     *,
     runtime_dir_path: Optional[str] = None,
-    log_file: Optional[str] = None,
     server_idle_timeout: Optional[float] = None,
     bypass_server: Callable[[], bool] = None,
     reload_server: Callable[[JSONType, JSONType], bool] = None,
@@ -45,14 +43,12 @@ def quicken(
             - `/tmp/quicken-{name}-{uid}`
             If the directory exists it must be owned by the current (real) uid
             and have permissions 700.
-        log_file: optional log file used by the server, must be an absolute
-            path. If not provided the default is:
-            - `$XDG_CACHE_HOME/quicken-{name}/server.log` or
-            - `$HOME/.cache/quicken-{name}/server.log`.
         server_idle_timeout: time in seconds after which the server will shut
             down if no requests are received or being processed.
         bypass_server: if this function returns True then we run the entry point
-            directly instead of trying to start or use an application server.
+            directly instead of trying to start or use an application server. In
+            this case the return value may be exactly the same as the wrapped function
+            instead of an integer exit code.
         reload_server: if this function returns True then we start a new server
             before running the entry point function - use it to check for
             updates for example. Receives the old and new user_data objects.
@@ -67,7 +63,9 @@ def quicken(
             if bypass_server and bypass_server():
                 return main_provider()()
 
-            # Lazy import to avoid overhead.
+            from .._timings import report
+
+            # Lazy imports to avoid overhead.
             report('load quicken library')
             from ._lib import server_runner_wrapper
             report('end load quicken library')
@@ -75,7 +73,6 @@ def quicken(
                 name,
                 main_provider,
                 runtime_dir_path=runtime_dir_path,
-                log_file=log_file,
                 server_idle_timeout=server_idle_timeout,
                 reload_server=reload_server,
                 user_data=user_data,

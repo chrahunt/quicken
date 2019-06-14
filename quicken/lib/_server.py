@@ -17,7 +17,6 @@ import contextvars
 import functools
 import json
 import logging
-import logging.config
 import multiprocessing
 import os
 import signal
@@ -33,7 +32,7 @@ from .. import __version__
 from ._asyncio import DeadlineTimer
 from ._constants import socket_name, stop_socket_name, server_state_name
 from ._imports import asyncio
-from ._logging import ContextLogger, NullContextFilter, UTCFormatter
+from ._logging import ContextLogger
 from ._multiprocessing import run_in_process
 from ._multiprocessing_asyncio import (
     AsyncConnectionAdapter,
@@ -60,7 +59,6 @@ def run(
     socket_handler,
     runtime_dir: RuntimeDir,
     server_idle_timeout: Optional[float],
-    log_file: Optional[str],
     user_data: Optional[Any],
 ):
     """Start the server in the background.
@@ -73,9 +71,8 @@ def run(
             working directory for the server
         server_idle_timeout: timeout after which server will shutdown if no
             active requests
-        log_file: used for server-side logging
+        user_data: JSON-serializable object put into server metadata file
     Raises:
-        Same as `open` for log file issues
         If there are any issues starting the server errors are re-raised.
     """
     logger.debug('Starting server launcher')
@@ -91,7 +88,6 @@ def run(
         _run_server,
         socket_handler,
         server_idle_timeout,
-        log_file,
         user_data,
     )
     return run_in_process(
@@ -132,7 +128,6 @@ def daemonize(detach, target, daemon_options: Dict):
 def _run_server(
     callback,
     server_idle_timeout: Optional[float],
-    log_file,
     user_data,
     done,
 ) -> None:
@@ -147,19 +142,19 @@ def _run_server(
         done: callback function invoked after setup and before we start handling
             requests
     """
-    if log_file:
-        _configure_logging(log_file, loglevel='DEBUG')
-
     logger.debug('_run_server()')
 
     loop = asyncio.new_event_loop()
 
     def print_exception(_loop, context):
-        exc = context['exception']
-        formatted_exc = ''.join(
-            traceback.format_exception(type(exc), exc, exc.__traceback__))
+        exc = context.get('exception')
+        if exc:
+            formatted_exc = ''.join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__))
+        else:
+            formatted_exc = '<no exception>'
         logger.error(
-            'Error in event loop: %s\n%s', context['message'], formatted_exc)
+            'Error in event loop: %r\n%s', context, formatted_exc)
 
     loop.set_exception_handler(print_exception)
 
@@ -253,7 +248,7 @@ class ProcessConnectionHandler(ConnectionHandler):
         logger.debug('Handling connection')
         try:
             await self._handle_connection(connection)
-        except:
+        except Exception:
             logger.exception('Unexpected exception handling connection')
             raise
         finally:
@@ -263,7 +258,9 @@ class ProcessConnectionHandler(ConnectionHandler):
                 self._connection_finish_cv.notify_all()
 
     async def _handle_connection(self, connection: AsyncConnectionAdapter):
+        # noinspection PyTypeChecker
         process: AsyncProcess = None
+        # noinspection PyTypeChecker
         process_task: asyncio.Task = None
         queue = asyncio.Queue()
         # Have 2 asynchronous tasks running in a loop:
@@ -306,7 +303,7 @@ class ProcessConnectionHandler(ConnectionHandler):
         async def accept_request():
             try:
                 request: Request = await connection.recv()
-            except ConnectionClose as e:
+            except ConnectionClose:
                 logger.debug('Connection closed')
             except ConnectionResetError:
                 logger.debug('Connection reset')
@@ -353,6 +350,7 @@ class ProcessConnectionHandler(ConnectionHandler):
 
     def _start_callback(self, process_state) -> AsyncProcess:
         def setup_child():
+            # XXX: Should close open fds (except the one for the sentinel).
             ProcessState.apply_to_current_process(process_state)
             try:
                 sys.exit(self._callback())
@@ -479,8 +477,8 @@ class Server:
                     async with self._shutdown_accept_cv:
                         self._shutdown_accept_cv.notify()
                 return
-
-            self._handle_connection(connection)
+            else:
+                self._handle_connection(connection)
 
     def _handle_connection(self, connection: AsyncConnectionAdapter):
         self._idle_handle_connect()
@@ -522,53 +520,3 @@ class Server:
         self._num_active_connections -= 1
         if not self._num_active_connections:
             self._set_idle_timer()
-
-
-def _configure_logging(logfile: str, loglevel: str) -> None:
-    parent = os.path.dirname(logfile)
-    os.makedirs(parent, mode=0o700, exist_ok=True)
-    # TODO: Make fully configurable.
-    logging.config.dictConfig({
-        'version': 1,
-        'disable_existing_loggers': False,
-        'filters': {
-            'context': {
-                '()': NullContextFilter,
-                'name': 'context',
-            }
-        },
-        'formatters': {
-            f'{__name__}-formatter': {
-                '()': UTCFormatter,
-                'format':
-                    '#### [{asctime}][{levelname}][{name}]'
-                    '[{process} ({processName})][{thread} ({threadName})]'
-                    '[{context}]\n'
-                    '    {message}',
-                'style': '{',
-            }
-        },
-        'handlers': {
-            f'{__name__}-handler': {
-                '()': 'logging.handlers.RotatingFileHandler',
-                'backupCount': 1,
-                'encoding': 'utf-8',
-                'filename': str(logfile),
-                'filters': ['context'],
-                'formatter': f'{__name__}-formatter',
-                'level': loglevel,
-                'maxBytes': 5_000_000,
-            }
-        },
-        'loggers': {
-            'quicken': {
-                'level': loglevel,
-                'handlers': [f'{__name__}-handler'],
-            },
-            'asyncio': {
-                'level': loglevel,
-                'handlers': [f'{__name__}-handler'],
-            },
-        },
-    })
-    logger.info('Server logging configured')

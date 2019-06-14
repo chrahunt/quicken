@@ -24,6 +24,7 @@ coverage = "^4.5"
 sphinx = "^1.8"
 sphinx_autodoc_typehints = "^1.5"
 wrapt = "^1.10"
+process-tracker = { version = "^0.1", platform = "linux" }
 pydevd = "^1.4"
 pytest-asyncio = "^0.9.0"
 tid = { version = "^0.2.0", platform = "linux" }
@@ -34,11 +35,12 @@ ch = "^0.1.2"
 pytest-benchmark = "^3.2"
 m2r = "^0.2.1"
 pygments-github-lexers = "^0.0.5"
+python-ptrace = "^0.9.3"
 
 [tool.poetry.scripts]
 quicken = "quicken._cli:main"
-quicken-c = "quicken.script:quicken._cli._.main"
-quicken-ctl = "quicken.ctl_script:quicken._cli._.main"
+quickenc = "quicken.script:quicken._cli._.main"
+quickenctl = "quicken.ctl_script:quicken._cli._.main"
 
 [build-system]
 requires = ["poetry>=0.12", "rtd-poetry"]

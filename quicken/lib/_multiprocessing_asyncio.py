@@ -47,6 +47,7 @@ class AsyncConnectionAdapter:
         self._attached = False
         self._read_queue = asyncio.Queue(loop=self._loop)
         self._write_queue = asyncio.Queue(loop=self._loop)
+        self._writer = None
         self._attach_to_event_loop()
 
     async def send(self, obj: Any):
@@ -103,6 +104,8 @@ class AsyncConnectionAdapter:
         # XXX: Should include __cause__ or context.
         self._read_queue.put_nowait(ConnectionClose())
         self._connected = False
+        if self._writer:
+            self._writer.cancel()
         self._loop.create_task(signal_disconnect())
 
     def _handle_writable(self):
@@ -117,7 +120,7 @@ class AsyncConnectionAdapter:
                 self._loop.add_writer(self._fd, self._handle_writable)
 
         self._loop.remove_writer(self._fd)
-        self._loop.create_task(handle())
+        self._writer = self._loop.create_task(handle())
 
 
 @contextmanager
@@ -251,7 +254,8 @@ class AsyncProcess:
     def start(self):
         assert self._process is None, 'Process was already started'
         self._process = multiprocessing.get_context('fork').Process(
-            target=self._target, args=self._args, kwargs=self._kwargs)
+            target=self._target, args=self._args, kwargs=self._kwargs
+        )
         self._process.start()
         # Clean up to avoid lingering references.
         self._target = None

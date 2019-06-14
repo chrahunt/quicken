@@ -14,6 +14,7 @@ if MYPY_CHECK_RUNNING:
     import asyncio
     import multiprocessing.connection as multiprocessing_connection
 
+    from hashlib import sha512
     from typing import Type
 
     from fasteners import InterProcessLock
@@ -48,6 +49,16 @@ class Modules:
         with patch_modules(modules=['tempfile']):
             import multiprocessing.connection
         return multiprocessing.connection
+
+    @property
+    def sha512(self) -> sha512:
+        try:
+            # Faster to import than hashlib if _sha512 is present. See e.g. python/cpython#12742
+            from _sha512 import sha512
+        except ImportError:
+            from hashlib import sha512
+
+        return sha512
 
 
 sys.modules[__name__] = Modules()

@@ -1,9 +1,12 @@
+"""Wait for file creation/deletion, for tests.
+"""
 import logging
 import signal
 import sys
 
 from collections import namedtuple
 from pathlib import Path
+from typing import Union
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -23,20 +26,15 @@ if not sys.platform.startswith('win'):
 Action = namedtuple('Action', 'path present')
 
 
-def wait_for_create(path: BoundPath, timeout: float = 5) -> bool:
+def wait_for_create(path: Union[BoundPath, Path], timeout: float = 5) -> bool:
     return _wait_for(Action(path, True), timeout)
 
 
-def wait_for_delete(path: BoundPath, timeout: float = 5) -> bool:
+def wait_for_delete(path: Union[BoundPath, Path], timeout: float = 5) -> bool:
     return _wait_for(Action(path, False), timeout)
 
 
 def _wait_for(action: Action, timeout: float = 5) -> bool:
-    """
-    Args:
-        action:
-        timeout:
-    """
     def action_check():
         return action.path.exists() == action.present
 
@@ -59,6 +57,8 @@ def _wait_for(action: Action, timeout: float = 5) -> bool:
         parent = action.path.dir
     elif isinstance(action.path, Path):
         parent = action.path.parent
+    else:
+        raise TypeError('path must be BoundPath or Path')
 
     with chdir(parent):
         observer = Observer(timeout=0)

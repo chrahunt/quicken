@@ -105,10 +105,3 @@ def test_runtime_dir_path_fails_when_directory_unlinked_and_recreated():
         assert Path(p).exists()
     finally:
         Path(p).rmdir()
-
-
-def test_runtime_dir_rejects_absolute_paths():
-    # Given a runtime dir that has been created.
-    # When an absolute path is passed to `path`
-    # Then it should reject with a ValueError.
-    ...

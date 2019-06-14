@@ -42,6 +42,7 @@ def test_watch_for_create_notices_file_fast():
             time.sleep(0.05)
             file.write_text('hello', encoding='utf-8')
             writer_timestamp = datetime.now()
+
         t = threading.Thread(target=create_file)
         t.start()
         result = wait_for_create(file, timeout=1)
@@ -80,6 +81,7 @@ def test_watch_for_delete_notices_file_fast():
             time.sleep(0.05)
             writer_timestamp = datetime.now()
             file.unlink()
+
         t = threading.Thread(target=create_file)
         t.start()
         result = wait_for_delete(file, timeout=1)

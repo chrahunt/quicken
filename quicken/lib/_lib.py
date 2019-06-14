@@ -17,7 +17,7 @@ from ._multiprocessing_reduction import set_fd_sharing_base_path_fd
 from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
 from ._typing import MYPY_CHECK_RUNNING
-from ._xdg import cache_dir, chdir, RuntimeDir
+from ._xdg import chdir, RuntimeDir
 from .. import __version__, set_importing
 from .._timings import report
 
@@ -28,7 +28,6 @@ if MYPY_CHECK_RUNNING:
 
 
 logger = logging.getLogger(__name__)
-
 
 
 def check_res_ids():
@@ -81,7 +80,6 @@ def server_runner_wrapper(
     # /,
     *,
     runtime_dir_path: Optional[str] = None,
-    log_file: Optional[str] = None,
     server_idle_timeout: Optional[float] = None,
     reload_server: Callable[[JSONType, JSONType], bool] = None,
     user_data: JSONType = None,
@@ -96,11 +94,10 @@ def server_runner_wrapper(
     except TypeError as e:
         raise QuickenError('user_data must be serializable') from e
 
-    if log_file is None:
-        log_file = os.path.join(cache_dir(f'quicken-{name}'), 'server.log')
-        log_file = os.path.abspath(log_file)
-
-    runtime_dir = RuntimeDir(f'quicken-{name}', runtime_dir_path)
+    try:
+        runtime_dir = RuntimeDir(name, runtime_dir_path)
+    except RuntimeError as e:
+        raise QuickenError(e.args[0]) from None
 
     set_fd_sharing_base_path_fd(runtime_dir.fileno())
 
@@ -120,19 +117,24 @@ def server_runner_wrapper(
                 need_start = True
 
         if need_start:
-            logger.info('Starting server')
-            # XXX: Should have logging around this, for timing.
             set_importing(True)
+            report('starting user code import')
             main = main_provider()
+            report('end user code import')
             set_importing(False)
-            manager.start_server(main, log_file, server_idle_timeout, user_data)
-            client = manager.connect()
+            report('starting server')
+            manager.start_server(main, server_idle_timeout, user_data)
+            report('connecting to server')
+            try:
+                client = manager.connect()
+            except ConnectionFailed:
+                logger.exception('failed to connect to server')
+                raise QuickenError('failed to connect to server')
 
     report('connected to server')
     proxy = SignalProxy()
     # We must block signals before requesting remote process start otherwise
     # a user signal to the client may race with our ability to propagate it.
-    from multiprocessing.reduction import ForkingPickler
     with blocked_signals(forwarded_signals):
         state = ProcessState.for_current_process()
         report('requesting start')
@@ -144,10 +146,11 @@ def server_runner_wrapper(
         logger.debug('Process running with pid: %d', pid)
         proxy.set_target(pid)
 
+    # At this point user code is running.
     logger.debug('Waiting for process to finish')
-    response = client.send(Request(RequestTypes.wait_process_done, None))
+    req = Request(RequestTypes.wait_process_done, None)
+    response = client.send(req)
     client.close()
-    report('client finished')
     return response.contents
 
 
@@ -201,7 +204,7 @@ class CliServerManager:
         """
         return self.server_state['user_data']
 
-    def start_server(self, main, log_file, server_idle_timeout, user_data):
+    def start_server(self, main, server_idle_timeout, user_data):
         """Start server as background process.
 
         This function only returns in the parent, not the background process.
@@ -210,7 +213,6 @@ class CliServerManager:
 
         Args:
             main: function that provides the server request handler
-            log_file: server log file
             server_idle_timeout: idle timeout communicated to server if the
                 process of connecting results in server start
             user_data: added to server state
@@ -218,8 +220,9 @@ class CliServerManager:
         assert self._lock.acquired, 'start_server must be called under lock.'
         # Lazy import so we only take the time to import if we have to start
         # the server.
-        # XXX: Should have logging around this, for timing.
+        report('start server import')
         from ._server import run
+        report('end server import')
 
         with chdir(self._runtime_dir):
             try:
@@ -227,9 +230,13 @@ class CliServerManager:
             except FileNotFoundError:
                 pass
 
+            try:
+                os.unlink(stop_socket_name)
+            except FileNotFoundError:
+                pass
+
         run(
             main,
-            log_file=log_file,
             runtime_dir=self._runtime_dir,
             server_idle_timeout=server_idle_timeout,
             user_data=user_data,

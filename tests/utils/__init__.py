@@ -3,8 +3,10 @@ import errno
 import logging
 import os
 import signal
+import string
 import sys
 import tempfile
+import textwrap
 
 from contextlib import contextmanager
 from pathlib import Path
@@ -142,3 +144,17 @@ def kept(o, attr):
         yield
     finally:
         setattr(o, attr, current_attr)
+
+
+def write_text(path: Path, text: str, **params):
+    new_text = string.Template(textwrap.dedent(text)).substitute(params)
+    path.write_text(new_text)
+
+
+@contextmanager
+def local_module():
+    with isolated_filesystem() as path:
+        with kept(sys, 'path'):
+            sys.path.append(str(path))
+            with kept(sys, 'modules'):
+                yield

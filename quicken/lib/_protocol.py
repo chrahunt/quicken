@@ -6,7 +6,6 @@ import logging
 import os
 import sys
 
-# Registers TextIOWrapper handler.
 from ._multiprocessing_reduction import dumps, loads
 from ._typing import MYPY_CHECK_RUNNING
 

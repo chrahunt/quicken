@@ -1,5 +1,3 @@
-"""
-"""
 from __future__ import annotations
 
 # Top-level package should be free from any unnecessary imports, since they are
