@@ -1,5 +1,13 @@
 .. mdinclude:: ../README.md
 
+Compatibility
+=============
+
+For ``quicken.script`` and ``quicken.ctl_script``, we will try to adhere to:
+
+1. ``status`` normal text output format compatibility may be changed
+2. ``status --json`` output will not be changed for the ``"status"`` key (which will have value either ``"up"`` or ``"down"``)
+
 Differences and restrictions
 ============================
 
@@ -19,6 +27,7 @@ In addition:
 
 * signals sent to the client that can be forwarded are sent to the command process
 * for SIGTSTP (C-z at a terminal) and SIGTTIN, we send SIGSTOP to the command process and then stop the client process
+* when continued, we attempt to send SIGCONT to the command process from the client process
 * for SIGKILL, which cannot be intercepted, the server recognizes when the connection to the client is broken and will
   kill the command process soon after
 * when the command runner exits, the client exits with the same exit code
