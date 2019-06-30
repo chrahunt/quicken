@@ -170,5 +170,5 @@ and can slow development. The purpose of this project is:
 
 ```shell
 poetry install
-poetry run pytest -s -ra
+poetry run pytest -ra
 ```

@@ -1,5 +1,6 @@
 """Test quicken.script and quicken.ctl_script along with associated helpers.
 """
+import json
 import subprocess
 import time
 
@@ -332,102 +333,115 @@ def test_log_file_unwritable_fails_fast_script(quicken_venv, poetry_build_venv, 
             assert result.returncode != 0
 
 
+@pytest.fixture
+def quicken_project(quicken_venv, poetry_build_venv, venvs):
+    venv = venvs.create()
+    venv.use_packages_from(quicken_venv)
+    venv.use_packages_from(poetry_build_venv)
+
+    with isolated_filesystem() as path:
+        write_text(path / 'pyproject.toml', basic_poetry_pyproject)
+
+        write_text(
+            path / 'hello.py',
+            f'''
+            def main():
+                from __test_helper__ import record
+                record(test_name='{current_test_name()}')
+            ''',
+        )
+
+        venv.install('--no-build-isolation', '.')
+
+        yield venv
+
+
 @non_windows
-def test_control_script_status(quicken_venv, poetry_build_venv, venvs):
+def test_control_script_status(quicken_project):
     # Given a project that declares a quicken and quicken-ctl script
     # And the server is up
     # When the quicken-ctl script is executed with status
     # Then the server status will be output
     # And the same server will be used for a subsequent command
-    venv = venvs.create()
-    venv.use_packages_from(quicken_venv)
-    venv.use_packages_from(poetry_build_venv)
-
-    with isolated_filesystem() as path:
-        write_text(path / 'pyproject.toml', basic_poetry_pyproject)
-
-        write_text(
-            path / 'hello.py',
-            f'''
-            def main():
-                from __test_helper__ import record
-                record(test_name='{current_test_name()}')
-            ''',
+    with contained_children():
+        result = subprocess.run(
+            [quicken_project.path / 'bin' / 'helloctl', 'status'],
+            stdout=subprocess.PIPE,
         )
+        assert result.returncode == 0
+        assert "Status: 'down'" in result.stdout.decode('utf-8')
 
-        venv.install('--no-build-isolation', '.')
+        result = subprocess.run(
+            [quicken_project.path / 'bin' / 'helloctl', 'status', '--json'],
+            stdout=subprocess.PIPE,
+        )
+        assert result.returncode == 0
+        parsed_output = json.loads(result.stdout)
+        assert len(parsed_output) == 1
+        assert parsed_output['status'] == 'down'
 
-        with contained_children():
-            with track_state() as run1:
-                result = subprocess.run([venv.path / 'bin' / 'hello'])
+        with track_state() as run1:
+            result = subprocess.run([quicken_project.path / 'bin' / 'hello'])
 
-            assert result.returncode == 0
-            assert run1.test_name == current_test_name()
-            run1.assert_unrelated_to_current_process()
+        assert result.returncode == 0
+        assert run1.test_name == current_test_name()
+        run1.assert_unrelated_to_current_process()
 
-            result = subprocess.run(
-                [venv.path / 'bin' / 'helloctl', 'status'],
-                stdout=subprocess.PIPE,
-            )
+        result = subprocess.run(
+            [quicken_project.path / 'bin' / 'helloctl', 'status'],
+            stdout=subprocess.PIPE,
+        )
+        assert result.returncode == 0
+        stdout = result.stdout.decode('utf-8')
+        assert "Status: 'up'" in stdout
+        assert f'Pid: {run1.ppid}' in stdout
 
-            assert result.returncode == 0
-            assert str(run1.ppid) in result.stdout.decode('utf-8')
+        result = subprocess.run(
+            [quicken_project.path / 'bin' / 'helloctl', 'status', '--json'],
+            stdout=subprocess.PIPE,
+        )
+        assert result.returncode == 0
+        parsed_output = json.loads(result.stdout)
+        assert parsed_output['pid'] == run1.ppid
+        assert parsed_output['status'] == 'up'
 
-            with track_state() as run2:
-                result = subprocess.run([venv.path / 'bin' / 'hello'])
+        with track_state() as run2:
+            result = subprocess.run([quicken_project.path / 'bin' / 'hello'])
 
-            # Ensure same server is used after status check.
-            assert result.returncode == 0
-            assert run2.test_name == current_test_name()
-            run2.assert_unrelated_to_current_process()
-            run2.assert_same_parent_as(run1)
+        # Ensure same server is used after status check.
+        assert result.returncode == 0
+        assert run2.test_name == current_test_name()
+        run2.assert_unrelated_to_current_process()
+        run2.assert_same_parent_as(run1)
 
 
 @non_windows
-def test_control_script_stop(quicken_venv, poetry_build_venv, venvs):
+def test_control_script_stop(quicken_project):
     # Given a project that declares a quicken and quicken-ctl script
     # And the server is up
     # When the quicken-ctl script is executed with stop
     # Then the server will stop
     # And the next command will be run with a new server
-    venv = venvs.create()
-    venv.use_packages_from(quicken_venv)
-    venv.use_packages_from(poetry_build_venv)
+    with contained_children():
+        with track_state() as run1:
+            result = subprocess.run([quicken_project.path / 'bin' / 'hello'])
 
-    with isolated_filesystem() as path:
-        write_text(path / 'pyproject.toml', basic_poetry_pyproject)
+        assert result.returncode == 0
+        assert run1.test_name == current_test_name()
+        run1.assert_unrelated_to_current_process()
 
-        write_text(
-            path / 'hello.py',
-            f'''
-            def main():
-                from __test_helper__ import record
-                record(test_name='{current_test_name()}')
-            ''',
+        result = subprocess.run(
+            [quicken_project.path / 'bin' / 'helloctl', 'stop'],
+            stdout=subprocess.PIPE,
         )
 
-        venv.install('--no-build-isolation', '.')
+        assert result.returncode == 0
 
-        with contained_children():
-            with track_state() as run1:
-                result = subprocess.run([venv.path / 'bin' / 'hello'])
+        with track_state() as run2:
+            result = subprocess.run([quicken_project.path / 'bin' / 'hello'])
 
-            assert result.returncode == 0
-            assert run1.test_name == current_test_name()
-            run1.assert_unrelated_to_current_process()
-
-            result = subprocess.run(
-                [venv.path / 'bin' / 'helloctl', 'stop'],
-                stdout=subprocess.PIPE,
-            )
-
-            assert result.returncode == 0
-
-            with track_state() as run2:
-                result = subprocess.run([venv.path / 'bin' / 'hello'])
-
-            # Ensure same server is used after status check.
-            assert result.returncode == 0
-            assert run2.test_name == current_test_name()
-            run2.assert_unrelated_to_current_process()
-            run2.assert_unrelated_to(run1)
+        # Ensure same server is used after status check.
+        assert result.returncode == 0
+        assert run2.test_name == current_test_name()
+        run2.assert_unrelated_to_current_process()
+        run2.assert_unrelated_to(run1)

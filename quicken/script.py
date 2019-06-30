@@ -20,6 +20,7 @@ import sys
 from ._scripts import wrapper_script
 
 
+# No public API.
 __all__ = []
 
 
@@ -42,4 +43,6 @@ def callback(helper):
     return wrapper(helper.get_func)()
 
 
+# Overwrite our module so we can use __getattribute__ to intercept the
+# user-library-provided module spec.
 sys.modules[__name__] = wrapper_script(callback)
