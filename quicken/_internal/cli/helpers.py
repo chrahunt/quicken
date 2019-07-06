@@ -16,7 +16,7 @@ class Commands:
     STOP = 'stop'
 
 
-def pretty_state(state):
+def pretty_state(state: Dict) -> str:
     def pretty_object(o: Dict, indent=0):
         indent_text = '  ' * indent
         lines = []
@@ -41,7 +41,7 @@ class CliServerManager:
         self._manager = manager
         self._output = output
 
-    def stop(self):
+    def stop(self) -> None:
         server_running = self._manager.server_running
         if server_running:
             self._writeln('Stopping...\n')
@@ -50,7 +50,7 @@ class CliServerManager:
         else:
             self._writeln('Server already down.')
 
-    def print_status(self, json_format=False):
+    def print_status(self, json_format: bool = False) -> None:
         server_running = self._manager.server_running
 
         state = {
@@ -65,5 +65,5 @@ class CliServerManager:
         else:
             self._writeln(pretty_state(state))
 
-    def _writeln(self, text):
+    def _writeln(self, text: str) -> None:
         self._output.writelines([text])

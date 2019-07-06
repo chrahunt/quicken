@@ -1,5 +1,6 @@
 import copy
 import errno
+import json
 import logging
 import os
 import signal
@@ -10,7 +11,7 @@ import textwrap
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import ContextManager, List, TextIO, Tuple, Union
+from typing import Any, ContextManager, List, TextIO, Tuple, Union
 
 from quicken._internal._signal import settable_signals
 
@@ -158,3 +159,12 @@ def local_module():
             sys.path.append(str(path))
             with kept(sys, 'modules'):
                 yield
+
+
+def load_json(s: str) -> Any:
+    """Load json, but with useful error message.
+    """
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f'Failed to parse "{s}" as json.')

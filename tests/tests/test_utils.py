@@ -1,4 +1,6 @@
-from ..utils import captured_std_streams
+import os
+
+from ..utils import captured_std_streams, env
 
 
 def test_captured_std_streams():

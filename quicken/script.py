@@ -17,20 +17,19 @@ import operator
 import os
 import sys
 
-from ._internal.entrypoints import wrapper_script
+from ._internal.constants import DEFAULT_IDLE_TIMEOUT, ENV_IDLE_TIMEOUT
+from ._internal.entrypoints import ConsoleScriptHelper, console_script
 
 
 # No public API.
 __all__ = []
 
 
-def callback(helper):
+def callback(helper: ConsoleScriptHelper):
     from ._internal.decorator import quicken
 
-    # 1 day
-    DEFAULT_IDLE_TIMEOUT = 86400
     idle_timeout = float(
-        os.environ.get('QUICKEN_IDLE_TIMEOUT', DEFAULT_IDLE_TIMEOUT)
+        os.environ.get(ENV_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT)
     )
 
     wrapper = quicken(
@@ -45,4 +44,4 @@ def callback(helper):
 
 # Overwrite our module so we can use __getattribute__ to intercept the
 # user-library-provided module spec.
-sys.modules[__name__] = wrapper_script(callback)
+sys.modules[__name__] = console_script(callback)

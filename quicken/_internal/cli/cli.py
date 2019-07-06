@@ -34,7 +34,6 @@ it makes sense:
 """
 from __future__ import annotations
 
-
 import argparse
 import ast
 import importlib.util
@@ -46,14 +45,16 @@ import sys
 from functools import partial
 
 from .helpers import CliServerManager, Commands
+from .parsing import is_main
 from .._imports import sha512
 from .._logging import default_configuration
 from .._typing import MYPY_CHECK_RUNNING
+from ..constants import DEFAULT_IDLE_TIMEOUT, ENV_IDLE_TIMEOUT
 from ..timings import report
 from ..xdg import RuntimeDir
 
 if MYPY_CHECK_RUNNING:
-    from typing import List
+    from typing import Callable, List, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -68,63 +69,22 @@ def run(name, metadata, callback, reload_callback=None):
         def reload_callback(old_data, new_data):
             return old_data != new_data
 
+    idle_timeout = float(
+        os.environ.get(ENV_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT)
+    )
+
     decorator = quicken(
-        name, reload_server=reload_callback, user_data=metadata
+        name,
+        reload_server=reload_callback,
+        server_idle_timeout=idle_timeout,
+        user_data=metadata,
     )
 
     return decorator(callback)()
 
 
-def is_main(node):
-    """Whether a node represents:
-    if __name__ == '__main__':
-    if '__main__' == __name__:
-    """
-    if not isinstance(node, ast.If):
-        return False
-
-    test = node.test
-
-    if not isinstance(test, ast.Compare):
-        return False
-
-    if len(test.ops) != 1 or not isinstance(test.ops[0], ast.Eq):
-        return False
-
-    if len(test.comparators) != 1:
-        return False
-
-    left = test.left
-    right = test.comparators[0]
-
-    if isinstance(left, ast.Name):
-        name = left
-    elif isinstance(right, ast.Name):
-        name = right
-    else:
-        return False
-
-    if isinstance(left, ast.Str):
-        str_part = left
-    elif isinstance(right, ast.Str):
-        str_part = right
-    else:
-        return False
-
-    if name.id != '__name__':
-        return False
-
-    if not isinstance(name.ctx, ast.Load):
-        return False
-
-    if str_part.s != '__main__':
-        return False
-
-    return True
-
-
 # XXX: May be nicer to use a Loader
-def parse_file(path: str):
+def parse_file(path: str) -> Tuple[Callable, Callable]:
     """
     Call "if __name__ == '__main__'" a "main_check".
 
@@ -163,7 +123,7 @@ def parse_file(path: str):
 
 
 class PathHandler:
-    def __init__(self, path, args):
+    def __init__(self, path):
         """
         Args:
             path: path to the file to process
@@ -175,8 +135,6 @@ class PathHandler:
 
         path = os.path.abspath(path)
         self._path = path
-
-        self._args = args
 
         real_path = os.path.realpath(path)
         digest = sha512(real_path.encode('utf-8')).hexdigest()
@@ -196,8 +154,8 @@ class PathHandler:
         logger.debug('Metadata: %s', self._metadata)
 
     @property
-    def argv(self):
-        return [self._path_arg, *self._args]
+    def argv_prefix(self):
+        return [self._path_arg]
 
     def main(self):
         report('start file parsing')
@@ -326,8 +284,8 @@ def get_arg_parser():
     def add_command_type_group(parser):
         selector = parser.add_mutually_exclusive_group(required=True)
         selector.add_argument('--file', help='path to script')
-        selector.add_argument('--entrypoint', help='spec as would be provided to console_scripts')
-        selector.add_argument('--from-path', help='name of command to search for in PATH')
+        #selector.add_argument('--entrypoint', help='spec as would be provided to console_scripts')
+        #selector.add_argument('--from-path', help='name of command to search for in PATH')
         return selector
 
     parser = argparse.ArgumentParser(
@@ -376,18 +334,14 @@ def main():
     except PermissionError:
         parser.error(f'QUICKEN_LOG ({os.environ["QUICKEN_LOG"]}) is not writable')
 
-    cmd_args = args.args
-    # argparse.REMAINDER leaves a leading --.
-    if cmd_args and cmd_args[0] == '--':
-        cmd_args.pop(0)
-
     if args.file:
         path = args.file
+
         if not os.access(path, os.R_OK):
             parser.error(f'Cannot read {path}')
 
         try:
-            handler = PathHandler(path, args.args)
+            handler = PathHandler(path)
         except FileNotFoundError:
             parser.error(f'{path} does not exist')
 
@@ -398,12 +352,15 @@ def main():
     #        parser.error('Sub-modules are not supported')
     #    handler = ModuleHandler(args.m, args.args)
 
-
-    # Reset sys.argv for quicken propagation.
-    # noinspection PyUnboundLocalVariable
-    sys.argv = handler.argv
-
     if args.action == RUN_COMMAND:
+        cmd_args = args.args
+        # argparse.REMAINDER leaves a leading --.
+        if cmd_args and cmd_args[0] == '--':
+            cmd_args.pop(0)
+        # Reset sys.argv for quicken propagation.
+        # noinspection PyUnboundLocalVariable
+        sys.argv = handler.argv_prefix + cmd_args
+
         sys.exit(
             run(handler.name, handler.metadata, handler.main, handler.reload_callback)
         )

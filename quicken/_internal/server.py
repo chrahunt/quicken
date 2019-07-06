@@ -195,6 +195,7 @@ def _run_server(
     server_state = {
         'create_time': time.time(),
         'lib_version': __version__,
+        'idle_timeout': server_idle_timeout,
         'pid': pid,
         'user_data': user_data,
         'groups': os.getgroups(),

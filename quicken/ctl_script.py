@@ -11,7 +11,7 @@ import argparse
 import sys
 
 from ._internal.cli.helpers import CliServerManager, Commands
-from ._internal.entrypoints import wrapper_script
+from ._internal.entrypoints import ConsoleScriptHelper, console_script
 from ._internal.lib import ServerManager
 from ._internal.xdg import RuntimeDir
 
@@ -41,7 +41,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def callback(helper):
+def callback(helper: ConsoleScriptHelper):
     name = helper.name
 
     runtime_dir = RuntimeDir(name)
@@ -61,4 +61,4 @@ def callback(helper):
 
 
 # See .script for explanation.
-sys.modules[__name__] = wrapper_script(callback)
+sys.modules[__name__] = console_script(callback)
