@@ -25,20 +25,57 @@ interpretation in wiki [here](https://github.com/chrahunt/quicken/wiki/Benchmark
 
 ## Usage
 
+### `quicken` CLI
+
+The `quicken` command can be use to quicken plain Python scripts that look like
+
+```python
+# script.py
+...
+
+def main():
+    pass
+
+
+if __name__ == '__main__':
+    main()
+```
+
+Running `quicken run --file script.py` followed by arguments will start the application server and
+run all code before `if __name__ == '__main__'`. For the first and subsequent commands, only
+the code in `if __name__ == '__main__'` will be executed. If the script is updated then a new
+server will be started.
+
+To see the status of the server: `quicken status --file script.py`
+
+To stop the server: `quicken stop --file script.py`
+
+The server is identified using the full path to the script.
+
+#### Note
+
+1. `__file__` is set to the full, resolved path to the file provided to `--file`, unlike
+   Python which sets it to the path provided on the command line. This is so the
+   code before `if __name__ == '__main__'` and the code after it see the same path
+   even if changing directories or the path provided to the command.
+2. By default the server will shut down after 24 hours of inactivity. This can be adjusted
+   by setting `QUICKEN_IDLE_TIMEOUT` to the desired time (in seconds) before invoking the
+   command that starts the server.
+
 ### `quicken.script`
 
-`quicken.script` is a helper that can wrap `console_scripts` as supported by several Python packaging tools.
+`quicken.script` can wrap `console_scripts` as supported by several Python packaging tools.
 
-If our console script is `hello=hello.cli:main`, then to use `quicken.script` we would add
+The `console_script`/entrypoint format is `quicken.script:module.path._.function.path`.
+For example, if our console script is `hello=hello.cli:main`, then we would use
 `helloc=quicken.script:hello.cli._.main`.
 
-In words: replace ":" with `._.` and prepend `quicken.script:`.
+Once set up, we can use `helloc` just like `hello`, but it should be faster after the
+first time.
 
-Once set up, we can use `helloc` just like `hello`, but it should be faster after the first time.
-
-Since `quicken` is still alpha software, it would be wise to provide a second
-command for testing as above, instead of only having a quicken-based command. We
-use a `c` suffix since it's a `c`lient.
+Since `quicken` is new, it would be wise to provide a second command for testing as
+above, instead of only having a quicken-based command. We use a `c` suffix since
+it's a `c`lient.
 
 If using setuptools (`setup.py`):
 
@@ -78,6 +115,12 @@ hello = "hello.cli:main"
 helloc = "quicken.script:hello.cli._.main"
 ```
 
+#### Notes
+
+1. By default the server will shut down after 24 hours of inactivity. This can be adjusted
+   by setting `QUICKEN_IDLE_TIMEOUT` to the desired time (in seconds) before invoking the
+   command that starts the server.
+
 ### `quicken.ctl_script`
 
 Similar to the above, using `quicken.ctl_script` provides a CLI to stop and
@@ -103,40 +146,6 @@ setup(
 
 Then we can use `helloctl status` to see the server status information and
 `helloctl stop` to stop the application server.
-
-### `quicken` CLI
-
-The `quicken` command can be use to quicken plain Python scripts that look like
-
-```python
-# script.py
-...
-
-def main():
-    pass
-
-
-if __name__ == '__main__':
-    main()
-```
-
-Running `quicken -f script.py` followed by arguments will start the application server and
-run all code before `if __name__ == '__main__'`. For the first and subsequent commands, only
-the code in `if __name__ == '__main__'` will be executed. If the script is updated then a new
-server will be started.
-
-To see the status of the server: `quicken --ctl status -f script.py`
-
-To stop the server: `quicken --ctl stop -f script.py`
-
-The server is identified using the full path to the script.
-
-#### Differences
-
-1. `__file__` is set to the full, resolved path to the file provided to `-f`, unlike
-   Python which sets it to the path provided on the command line. This is so the
-   code before `if __name__ == '__main__'` and the code after it see the same path
-   even if the user changes directories or the path provided to the command.
 
 # Why
 

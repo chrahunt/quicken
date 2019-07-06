@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 # noinspection PyProtectedMember
-from quicken.lib._multiprocessing import run_in_process
+from quicken._internal._multiprocessing import run_in_process
 # noinspection PyProtectedMember
-from quicken.lib._multiprocessing_reduction import (
+from quicken._internal._multiprocessing_reduction import (
     dumps,
     loads,
     set_fd_sharing_base_path_fd,

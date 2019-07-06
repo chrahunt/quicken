@@ -33,8 +33,8 @@ def test_something():
         ...
 ```
 """
-from quicken.lib import quicken
-from quicken.lib._logging import default_configuration, reset_configuration
+from quicken._internal.decorator import quicken
+from quicken._internal._logging import default_configuration, reset_configuration
 
 from ..conftest import get_log_file
 from ..utils import env, preserved_signals

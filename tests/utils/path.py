@@ -6,7 +6,7 @@ from pathlib import PosixPath
 from functools import wraps
 from typing import Any, ContextManager, Union
 
-from quicken.lib._xdg import chdir
+from quicken._internal.xdg import chdir
 
 
 @contextmanager

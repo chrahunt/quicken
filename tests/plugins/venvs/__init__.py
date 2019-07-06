@@ -104,7 +104,11 @@ class _Venv:
     def run(self, cmd: List[Any], *args, **kwargs):
         """Passes-thru args to Python running in the context of this environment.
         """
-        interpreter = Path(self.path) / 'bin' / 'python'
+        base_path = Path(self.path)
+        if sys.platform.startswith('win'):
+            interpreter = base_path / 'Scripts' / 'python.exe'
+        else:
+            interpreter = base_path / 'bin' / 'python'
         cmd.insert(0, interpreter)
         return subprocess.run([str(c) for c in cmd], *args, **kwargs)
 

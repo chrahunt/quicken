@@ -13,7 +13,7 @@ from multiprocessing.reduction import recv_handle, send_handle
 from ._imports import multiprocessing_connection
 from ._signal import blocked_signals, signal_range
 from ._typing import MYPY_CHECK_RUNNING
-from ._xdg import chdir
+from .xdg import chdir
 
 if MYPY_CHECK_RUNNING:
     from typing import TextIO

@@ -8,7 +8,7 @@ import pytest
 
 from _pytest.capture import DontReadFromInput, EncodedFile
 
-from quicken.lib._multiprocessing_reduction import register
+from quicken._internal._multiprocessing_reduction import register
 
 windows_only = pytest.mark.skipif(
     not sys.platform.startswith('win'), reason='Windows only')

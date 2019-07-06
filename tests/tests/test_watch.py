@@ -3,7 +3,7 @@ import os
 import threading
 import time
 
-from quicken.lib._xdg import RuntimeDir
+from quicken._internal.xdg import RuntimeDir
 
 from ..utils import isolated_filesystem
 from ..utils.pytest import non_windows

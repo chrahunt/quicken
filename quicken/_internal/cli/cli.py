@@ -34,7 +34,6 @@ it makes sense:
 """
 from __future__ import annotations
 
-
 import argparse
 import ast
 import importlib.util
@@ -45,14 +44,17 @@ import sys
 
 from functools import partial
 
-from ._timings import report
-from .lib._imports import sha512
-from .lib._logging import default_configuration
-from .lib._typing import MYPY_CHECK_RUNNING
-from .lib._xdg import RuntimeDir
+from .helpers import CliServerManager, Commands
+from .parsing import is_main
+from .._imports import sha512
+from .._logging import default_configuration
+from .._typing import MYPY_CHECK_RUNNING
+from ..constants import DEFAULT_IDLE_TIMEOUT, ENV_IDLE_TIMEOUT
+from ..timings import report
+from ..xdg import RuntimeDir
 
 if MYPY_CHECK_RUNNING:
-    from typing import List
+    from typing import Callable, List, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -60,70 +62,29 @@ logger = logging.getLogger(__name__)
 
 def run(name, metadata, callback, reload_callback=None):
     report('start quicken load')
-    from .lib import quicken
+    from ..decorator import quicken
     report('end quicken load')
 
     if reload_callback is None:
         def reload_callback(old_data, new_data):
             return old_data != new_data
 
+    idle_timeout = float(
+        os.environ.get(ENV_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT)
+    )
+
     decorator = quicken(
-        name, reload_server=reload_callback, user_data=metadata
+        name,
+        reload_server=reload_callback,
+        server_idle_timeout=idle_timeout,
+        user_data=metadata,
     )
 
     return decorator(callback)()
 
 
-def is_main(node):
-    """Whether a node represents:
-    if __name__ == '__main__':
-    if '__main__' == __name__:
-    """
-    if not isinstance(node, ast.If):
-        return False
-
-    test = node.test
-
-    if not isinstance(test, ast.Compare):
-        return False
-
-    if len(test.ops) != 1 or not isinstance(test.ops[0], ast.Eq):
-        return False
-
-    if len(test.comparators) != 1:
-        return False
-
-    left = test.left
-    right = test.comparators[0]
-
-    if isinstance(left, ast.Name):
-        name = left
-    elif isinstance(right, ast.Name):
-        name = right
-    else:
-        return False
-
-    if isinstance(left, ast.Str):
-        str_part = left
-    elif isinstance(right, ast.Str):
-        str_part = right
-    else:
-        return False
-
-    if name.id != '__name__':
-        return False
-
-    if not isinstance(name.ctx, ast.Load):
-        return False
-
-    if str_part.s != '__main__':
-        return False
-
-    return True
-
-
 # XXX: May be nicer to use a Loader
-def parse_file(path: str):
+def parse_file(path: str) -> Tuple[Callable, Callable]:
     """
     Call "if __name__ == '__main__'" a "main_check".
 
@@ -162,7 +123,7 @@ def parse_file(path: str):
 
 
 class PathHandler:
-    def __init__(self, path, args):
+    def __init__(self, path):
         """
         Args:
             path: path to the file to process
@@ -174,8 +135,6 @@ class PathHandler:
 
         path = os.path.abspath(path)
         self._path = path
-
-        self._args = args
 
         real_path = os.path.realpath(path)
         digest = sha512(real_path.encode('utf-8')).hexdigest()
@@ -195,8 +154,8 @@ class PathHandler:
         logger.debug('Metadata: %s', self._metadata)
 
     @property
-    def argv(self):
-        return [self._path_arg, *self._args]
+    def argv_prefix(self):
+        return [self._path_arg]
 
     def main(self):
         report('start file parsing')
@@ -318,47 +277,71 @@ class ModuleHandler:
             raise ImportError("No code object available for %s" % self._module_name)
 
 
-def parse_args(args=None):
+RUN_COMMAND = 'run'
+
+
+def get_arg_parser():
+    def add_command_type_group(parser):
+        selector = parser.add_mutually_exclusive_group(required=True)
+        selector.add_argument('--file', help='path to script')
+        #selector.add_argument('--entrypoint', help='spec as would be provided to console_scripts')
+        #selector.add_argument('--from-path', help='name of command to search for in PATH')
+        return selector
+
     parser = argparse.ArgumentParser(
-        description='''
-        Invoke Python commands in an application server.
-        '''
+        description='Run Python commands in an application server.'
     )
-    parser.add_argument(
-        '--ctl',
-        choices=['status', 'stop'],
-        help='server control'
+
+    subparsers = parser.add_subparsers(
+        description='',
+        dest='action',
+        metavar='<subcommand>',
+        required=True
     )
-    selector = parser.add_mutually_exclusive_group(required=True)
-    # We have to have an option name otherwise the first value in `args` might
-    # be taken as the script path.
-    selector.add_argument('-f', help='path to script')
-    # Deferred.
-    #selector.add_argument('-m', help='module name')
 
-    parser.add_argument('args', nargs='*')
+    run_parser = subparsers.add_parser(
+        RUN_COMMAND, description='Run a command on a quicken server.', help='run code'
+    )
+    add_command_type_group(run_parser)
+    run_parser.add_argument(
+        'args',
+        help='arguments to pass to the underlying command',
+        nargs=argparse.REMAINDER,
+    )
 
-    parsed = parser.parse_args(args)
-    return parser, parsed
+    status_parser = subparsers.add_parser(
+        Commands.STATUS, description='Get server status.', help='get server status'
+    )
+    add_command_type_group(status_parser)
+    status_parser.add_argument('--json', action='store_true', help='output status data as JSON')
+
+    stop_parser = subparsers.add_parser(
+        Commands.STOP, description='Stop server.', help='stop server if it is running'
+    )
+    add_command_type_group(stop_parser)
+
+    return parser
 
 
 def main():
     report('start main()')
 
-    parser, args = parse_args()
+    parser = get_arg_parser()
+    args = parser.parse_args()
 
     try:
         default_configuration()
     except PermissionError:
         parser.error(f'QUICKEN_LOG ({os.environ["QUICKEN_LOG"]}) is not writable')
 
-    if args.f:
-        path = args.f
+    if args.file:
+        path = args.file
+
         if not os.access(path, os.R_OK):
             parser.error(f'Cannot read {path}')
 
         try:
-            handler = PathHandler(path, args.args)
+            handler = PathHandler(path)
         except FileNotFoundError:
             parser.error(f'{path} does not exist')
 
@@ -369,33 +352,32 @@ def main():
     #        parser.error('Sub-modules are not supported')
     #    handler = ModuleHandler(args.m, args.args)
 
-    # noinspection PyUnboundLocalVariable
-    sys.argv = handler.argv
+    if args.action == RUN_COMMAND:
+        cmd_args = args.args
+        # argparse.REMAINDER leaves a leading --.
+        if cmd_args and cmd_args[0] == '--':
+            cmd_args.pop(0)
+        # Reset sys.argv for quicken propagation.
+        # noinspection PyUnboundLocalVariable
+        sys.argv = handler.argv_prefix + cmd_args
 
-    if args.ctl:
-        from .lib._lib import CliServerManager, ConnectionFailed
-
-        runtime_dir = RuntimeDir(handler.name)
-
-        manager = CliServerManager(runtime_dir)
-
-        with manager.lock:
-            try:
-                client = manager.connect()
-            except ConnectionFailed:
-                print('Server down')
-                sys.exit(0)
-            else:
-                client.close()
-
-            if args.ctl == 'status':
-                print(manager.server_state)
-            elif args.ctl == 'stop':
-                manager.stop_server()
-            else:
-                sys.stderr.write('Unknown action')
-                sys.exit(1)
-    else:
         sys.exit(
             run(handler.name, handler.metadata, handler.main, handler.reload_callback)
         )
+
+    from ..lib import ServerManager
+
+    name = handler.name
+
+    runtime_dir = RuntimeDir(name)
+
+    manager = ServerManager(runtime_dir)
+
+    with manager.lock:
+        cli_manager = CliServerManager(manager, sys.stdout)
+
+        if args.action == Commands.STATUS:
+            cli_manager.print_status(json_format=args.json)
+
+        elif args.action == Commands.STOP:
+            cli_manager.stop()

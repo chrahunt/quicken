@@ -15,12 +15,12 @@ from unittest.mock import Mock, patch
 import psutil
 import pytest
 
-import quicken.lib._lib
+import quicken._internal.lib
 
-from quicken.lib import QuickenError
-from quicken.lib._constants import server_state_name, socket_name
-from quicken.lib._signal import forwarded_signals
-from quicken.lib._xdg import RuntimeDir
+from quicken._internal import QuickenError
+from quicken._internal._signal import forwarded_signals
+from quicken._internal.constants import server_state_name, socket_name
+from quicken._internal.xdg import RuntimeDir
 
 from . import cli_factory
 from ..utils import (
@@ -745,10 +745,10 @@ def test_server_reload_when_library_version_changes():
         assert run1.pid != test_pid
         assert run1.ppid != test_pid
 
-        with kept(quicken.lib._lib, '__version__'):
+        with kept(quicken._internal.lib, '__version__'):
             # Set on _lib since the attribute is imported directly.
-            quicken.lib._lib.__version__ = increment_patch(
-                quicken.lib._lib.__version__
+            quicken._internal.lib.__version__ = increment_patch(
+                quicken._internal.lib.__version__
             )
 
             with track_state() as run2:
@@ -817,7 +817,7 @@ def test_server_not_creating_socket_file_raises_exception(mocker):
     # When the decorated function is executed
     # Then it should time out waiting for the socket file to be created and
     #  raise a QuickenError with message 'timed out connecting to server'
-    mocker.patch('quicken.lib._server.run')
+    mocker.patch('quicken._internal.server.run')
     @cli_factory()
     def runner():
         def inner():
@@ -837,7 +837,7 @@ def test_server_not_listening_on_socket_file_raises_exception(mocker):
     # When the decorated function is executed
     # Then it should raise a QuickenError with message 'failed to connect to
     #  server'
-    run_function = mocker.patch('quicken.lib._server.run')
+    run_function = mocker.patch('quicken._internal.server.run')
 
     def fake_listener(*_args, **_kwargs):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

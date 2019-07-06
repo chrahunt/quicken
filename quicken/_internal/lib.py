@@ -10,19 +10,19 @@ import socket
 from contextlib import contextmanager
 
 from . import QuickenError
-from ._client import Client
-from ._constants import socket_name, server_state_name, stop_socket_name
 from ._imports import InterProcessLock
 from ._multiprocessing_reduction import set_fd_sharing_base_path_fd
-from ._protocol import ProcessState, Request, RequestTypes
 from ._signal import blocked_signals, forwarded_signals, SignalProxy
 from ._typing import MYPY_CHECK_RUNNING
-from ._xdg import chdir, RuntimeDir
+from .client import Client
+from .constants import socket_name, server_state_name, stop_socket_name
+from .protocol import ProcessState, Request, RequestTypes
+from .timings import report
+from .xdg import chdir, RuntimeDir
 from .. import __version__, set_importing
-from .._timings import report
 
 if MYPY_CHECK_RUNNING:
-    from typing import Callable, Optional
+    from typing import Any, Callable, Dict, Optional
 
     from ._types import JSONType, MainProvider
 
@@ -47,7 +47,7 @@ def check_res_ids():
 
 
 def need_server_reload(manager, reload_server, user_data):
-    server_state = manager.server_state
+    server_state = manager.server_state_raw
     # Check version first, in case other key fields may have changed.
     if __version__ != server_state['lib_version']:
         logger.info('Reloading due to library version change')
@@ -101,7 +101,7 @@ def server_runner_wrapper(
 
     set_fd_sharing_base_path_fd(runtime_dir.fileno())
 
-    manager = CliServerManager(runtime_dir)
+    manager = ServerManager(runtime_dir)
 
     report('connecting to server')
     with manager.lock:
@@ -158,7 +158,13 @@ class ConnectionFailed(Exception):
     pass
 
 
-class CliServerManager:
+class ServerState:
+    def __init__(self, running: bool, attributes: Dict[str, Any] = None):
+        self.running = running
+        self.attributes = attributes or {}
+
+
+class ServerManager:
     """Responsible for starting (if applicable) and connecting to the server.
 
     Race conditions are prevented by acquiring an exclusive lock on
@@ -192,17 +198,44 @@ class CliServerManager:
                 raise ConnectionFailed('Connection refused') from e
 
     @property
-    def server_state(self):
+    def server_state_raw(self) -> Dict[str, Any]:
+        """Raw state as read from disk.
+        """
         with chdir(self._runtime_dir):
             with open(server_state_name, encoding='utf-8') as f:
                 text = f.read()
         return json.loads(text)
 
     @property
+    def server_running(self) -> bool:
+        try:
+            client = self.connect()
+        except ConnectionFailed:
+            pass
+        else:
+            client.close()
+            return True
+        return False
+
+    @property
+    def server_state(self) -> ServerState:
+        """Combined, preprocessed server state for CLI.
+        """
+        server_running = self.server_running
+        state = {
+            'status': 'up' if server_running else 'down'
+        }
+
+        if server_running:
+            state.update(self.server_state_raw)
+
+        return ServerState(server_running, state)
+
+    @property
     def user_data(self):
         """Returns user data for the current server.
         """
-        return self.server_state['user_data']
+        return self.server_state_raw['user_data']
 
     def start_server(self, main, server_idle_timeout, user_data):
         """Start server as background process.
@@ -221,7 +254,7 @@ class CliServerManager:
         # Lazy import so we only take the time to import if we have to start
         # the server.
         report('start server import')
-        from ._server import run
+        from .server import run
         report('end server import')
 
         with chdir(self._runtime_dir):

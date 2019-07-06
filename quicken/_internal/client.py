@@ -6,7 +6,7 @@ from ._imports import multiprocessing_connection
 from ._typing import MYPY_CHECK_RUNNING
 
 if MYPY_CHECK_RUNNING:
-    from ._protocol import Request, Response
+    from .protocol import Request, Response
 
 
 def make_client(address):

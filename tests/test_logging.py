@@ -3,7 +3,7 @@ import logging
 
 import pytest
 
-from quicken.lib._protocol import ProcessState
+from quicken._internal.protocol import ProcessState
 
 from .utils.pytest import non_windows
 

@@ -21,11 +21,11 @@ from pygments import lexers
 
 lexers.find_lexer_class('TOML')
 
-# -- Project-specific configurat ---------------------------------------------
+# -- Project-specific configuration ------------------------------------------
 
-module = types.ModuleType('quicken.lib._typing')
+module = types.ModuleType('quicken._internal._typing')
 module.MYPY_CHECK_RUNNING = True
-sys.modules['quicken.lib._typing'] = module
+sys.modules['quicken._internal._typing'] = module
 
 # -- Project information -----------------------------------------------------
 

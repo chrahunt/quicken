@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from quicken.lib._asyncio import DeadlineTimer
+from quicken._internal._asyncio import DeadlineTimer
 
 
 @pytest.mark.asyncio

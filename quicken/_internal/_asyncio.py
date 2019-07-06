@@ -7,6 +7,8 @@ from ._typing import MYPY_CHECK_RUNNING
 if MYPY_CHECK_RUNNING:
     import asyncio
 
+    from typing import Optional
+
 
 class DeadlineTimer:
     """Timer that can handle waits > 1 day, since Python < 3.7.1 does not.
@@ -17,7 +19,7 @@ class DeadlineTimer:
         self._loop = loop
         self._callback = callback
         self._time_remaining = 0
-        self._handle: asyncio.TimerHandle = None
+        self._handle: Optional[asyncio.TimerHandle] = None
 
     def cancel(self):
         if self._handle:
