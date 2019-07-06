@@ -38,9 +38,9 @@ pygments-github-lexers = "^0.0.5"
 python-ptrace = "^0.9.3"
 
 [tool.poetry.scripts]
-quicken = "quicken._cli:main"
-quickenc = "quicken.script:quicken._cli._.main"
-quickenctl = "quicken.ctl_script:quicken._cli._.main"
+quicken = "quicken._internal.cli.cli:main"
+quickenc = "quicken.script:quicken._internal.cli.cli._.main"
+quickenctl = "quicken.ctl_script:quicken._internal.cli.cli._.main"
 
 [build-system]
 requires = ["poetry>=0.12", "rtd-poetry"]

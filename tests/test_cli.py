@@ -9,7 +9,7 @@ from textwrap import dedent
 
 import pytest
 
-from quicken._cli import parse_args, parse_file
+from quicken._internal.cli.cli import get_arg_parser, parse_file
 
 from .utils import (
     captured_std_streams,
@@ -41,10 +41,12 @@ def sys_path(path):
         sys.path = current_sys_path
 
 
-def test_args_ctl_passthru():
-    _, args = parse_args(['-f', './script.py', '--', '--ctl'])
-    assert args.f == './script.py'
-    assert args.args == ['--ctl']
+def test_args_passthru():
+    parser = get_arg_parser()
+    args = parser.parse_args(['run', '--file', './script.py', '--', '--help'])
+    assert args.action == 'run'
+    assert args.file == './script.py'
+    assert args.args == ['--', '--help']
 
 
 #def test_args_module_passthru():
@@ -54,9 +56,10 @@ def test_args_ctl_passthru():
 
 
 def test_file_args_passthru():
-    _, args = parse_args(['-f', 'foo', '--', '-m', 'hello'])
-    assert args.f == 'foo'
-    assert args.args == ['-m', 'hello']
+    parser = get_arg_parser()
+    args = parser.parse_args(['stop', '--file', 'foo'])
+    assert args.action == 'stop'
+    assert args.file == 'foo'
 
 
 def test_file_evaluation():
@@ -300,7 +303,7 @@ def test_file_argv_set(log_file_path, quicken_script):
         with env(QUICKEN_LOG=str(log_file_path)):
             with contained_children():
                 result = subprocess.run(
-                    ['quicken', '-f', 'script.py', 'hello'],
+                    ['quicken', 'run', '--file', 'script.py', 'hello'],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
@@ -341,7 +344,7 @@ def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_scr
             with contained_children():
                 with track_state() as run1:
                     result = subprocess.run(
-                        ['quicken', '-f', str(script)]
+                        ['quicken', 'run', '--file', str(script)]
                     )
 
                 assert result.returncode == 0
@@ -350,7 +353,7 @@ def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_scr
 
                 with track_state() as run2:
                     result = subprocess.run(
-                        ['quicken', '-f', str(symlink)]
+                        ['quicken', 'run', '--file', str(symlink)]
                     )
 
                 assert result.returncode == 0
@@ -360,7 +363,7 @@ def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_scr
                 with chdir('a'):
                     with track_state() as run3:
                         result = subprocess.run(
-                            ['quicken', '-f', script.name]
+                            ['quicken', 'run', '--file', script.name]
                         )
 
                     assert result.returncode == 0
@@ -369,7 +372,7 @@ def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_scr
 
                     with track_state() as run4:
                         result = subprocess.run(
-                            ['quicken', '-f', symlink.name]
+                            ['quicken', 'run', '--file', symlink.name]
                         )
 
                     assert result.returncode == 0
@@ -412,7 +415,7 @@ def test_file_path_symlink_modified(log_file_path, quicken_script):
             with contained_children():
                 with track_state() as run1:
                     result = subprocess.run(
-                        ['quicken', '-f', str(symlink)]
+                        ['quicken', 'run', '--file', str(symlink)]
                     )
 
                 assert result.returncode == 0
@@ -423,7 +426,7 @@ def test_file_path_symlink_modified(log_file_path, quicken_script):
 
                 with track_state() as run2:
                     result = subprocess.run(
-                        ['quicken', '-f', str(symlink)]
+                        ['quicken', 'run', '--file', str(symlink)]
                     )
 
                 assert result.returncode == 0
@@ -455,7 +458,7 @@ def test_log_file_unwritable_fails_fast_cli(quicken_script):
         with env(QUICKEN_LOG=str(log_file.absolute())):
             with contained_children():
                 result = subprocess.run(
-                    ['quicken', '-f', script],
+                    ['quicken', 'run', '--file', script],
                     stderr=subprocess.PIPE,
                 )
 
@@ -476,7 +479,7 @@ def test_script_file_unreadable_fails_with_error(quicken_script):
 
         with contained_children():
             result = subprocess.run(
-                ['quicken', '-f', str(script)],
+                ['quicken', 'run', '--file', str(script)],
                 stderr=subprocess.PIPE,
             )
 

@@ -17,7 +17,7 @@ import operator
 import os
 import sys
 
-from ._scripts import wrapper_script
+from ._internal.entrypoints import wrapper_script
 
 
 # No public API.
@@ -25,7 +25,7 @@ __all__ = []
 
 
 def callback(helper):
-    from .lib import quicken
+    from ._internal.decorator import quicken
 
     # 1 day
     DEFAULT_IDLE_TIMEOUT = 86400

@@ -28,7 +28,7 @@ test_quicken_program = '''
 import os
 import sys
 
-from quicken.lib import quicken
+from quicken._internal.decorator import quicken
 
 
 def bypass():
@@ -74,7 +74,7 @@ def test_python_program_time(benchmark):
 
 def test_quicken_import_time(benchmark):
     def target():
-        return run_code('from quicken.lib import quicken')
+        return run_code('from quicken._internal.decorator import quicken')
 
     result = benchmark(target)
     assert result == 0, 'Process must have exited cleanly'
@@ -82,7 +82,7 @@ def test_quicken_import_time(benchmark):
 
 def test_quicken_cli_import_time(benchmark):
     def target():
-        return run_code('import quicken.lib._lib')
+        return run_code('import quicken._internal.lib')
 
     result = benchmark(target)
     assert result == 0, 'Process must have exited cleanly'
@@ -98,10 +98,10 @@ def test_quicken_bypass_run_time(benchmark):
 
 
 def test_quicken_server_import_time(benchmark):
-    # We import _server lazily, this shows us the portion of startup that goes
+    # We import server lazily, this shows us the portion of startup that goes
     # towards that.
     def target():
-        return run_code('import quicken.lib._server; import quicken.lib._lib')
+        return run_code('import quicken._internal.server; import quicken._internal.lib')
 
     result = benchmark(target)
     assert result == 0, 'Process must have exited cleanly'

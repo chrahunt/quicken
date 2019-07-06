@@ -8,9 +8,9 @@ import os
 import stat
 import sys
 
-from .lib._imports import sha512
-from .lib._logging import default_configuration
-from .lib._typing import MYPY_CHECK_RUNNING
+from quicken._internal._imports import sha512
+from quicken._internal._logging import default_configuration
+from quicken._internal._typing import MYPY_CHECK_RUNNING
 
 if MYPY_CHECK_RUNNING:
     from typing import Any, Dict, List, Tuple

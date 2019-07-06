@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from quicken._scripts import get_attribute_accumulator, ScriptHelper
+from quicken._internal.entrypoints import get_attribute_accumulator, ScriptHelper
 
 from .utils import env, isolated_filesystem, local_module, write_text
 from .utils.process import active_children, contained_children

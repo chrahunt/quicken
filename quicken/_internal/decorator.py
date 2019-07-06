@@ -63,11 +63,11 @@ def quicken(
             if bypass_server and bypass_server():
                 return main_provider()()
 
-            from .._timings import report
+            from quicken._internal.timings import report
 
             # Lazy imports to avoid overhead.
             report('load quicken library')
-            from ._lib import server_runner_wrapper
+            from .lib import server_runner_wrapper
             report('end load quicken library')
             return server_runner_wrapper(
                 name,

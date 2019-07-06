@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import ContextManager, List, TextIO, Tuple, Union
 
-from quicken.lib._signal import settable_signals
+from quicken._internal._signal import settable_signals
 
 
 logger = logging.getLogger(__name__)

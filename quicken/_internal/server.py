@@ -28,9 +28,7 @@ import traceback
 from abc import ABC, abstractmethod
 from contextlib import ExitStack
 
-from .. import __version__
 from ._asyncio import DeadlineTimer
-from ._constants import socket_name, stop_socket_name, server_state_name
 from ._imports import asyncio
 from ._logging import ContextLogger
 from ._multiprocessing import run_in_process
@@ -42,9 +40,11 @@ from ._multiprocessing_asyncio import (
     ListenerStopped
 )
 from ._typing import MYPY_CHECK_RUNNING
-from ._protocol import ProcessState, Request, RequestTypes, Response
 from ._signal import settable_signals
-from ._xdg import RuntimeDir
+from .constants import socket_name, stop_socket_name, server_state_name
+from .protocol import ProcessState, Request, RequestTypes, Response
+from .xdg import RuntimeDir
+from .. import __version__
 
 if MYPY_CHECK_RUNNING:
     from typing import Any, Dict, Optional
