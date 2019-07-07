@@ -10,7 +10,11 @@ from textwrap import dedent
 import pytest
 
 from quicken._internal.cli.cli import get_arg_parser, parse_file
-from quicken._internal.constants import DEFAULT_IDLE_TIMEOUT, ENV_IDLE_TIMEOUT
+from quicken._internal.constants import (
+    DEFAULT_IDLE_TIMEOUT,
+    ENV_IDLE_TIMEOUT,
+    ENV_LOG_FILE,
+)
 
 from .utils import (
     captured_std_streams,
@@ -283,7 +287,13 @@ def quicken_script(quicken_venv):
         yield
 
 
-def test_file_argv_set(log_file_path, quicken_script):
+@pytest.fixture
+def logged(log_file_path):
+    with env(**{ENV_LOG_FILE: str(log_file_path.absolute())}):
+        yield
+
+
+def test_file_argv_set(quicken_script, logged):
     # Given a file `script.py`
     # sys.argv should start with `script.py` and be followed by any
     # other arguments
@@ -301,19 +311,18 @@ def test_file_argv_set(log_file_path, quicken_script):
         )
 
         args = ["hello"]
-        with env(QUICKEN_LOG=str(log_file_path)):
-            with contained_children():
-                result = subprocess.run(
-                    ["quicken", "run", "--file", "script.py", "hello"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
+        with contained_children():
+            result = subprocess.run(
+                ["quicken", "run", "--file", "script.py", "hello"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
 
         assert result.returncode == 0, f"process must succeed: {result}"
         assert result.stdout.decode("utf-8") == f"script.py\n{args[0]}\n"
 
 
-def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_script):
+def test_file_server_name_uses_absolute_resolved_path(quicken_script, logged):
     # Given a file `a/script.py`
     # And a symlink `a/foo` pointing to `script.py`
     # And a server started from `a/script.py`
@@ -339,39 +348,34 @@ def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_scr
         symlink = base_dir / "foo"
         symlink.symlink_to(script.name)
 
-        with env(QUICKEN_LOG=str(log_file_path)):
-            with contained_children():
-                with track_state() as run1:
-                    result = subprocess.run(["quicken", "run", "--file", str(script)])
+        with contained_children():
+            with track_state() as run1:
+                result = subprocess.run(["quicken", "run", "--file", str(script)])
+
+            assert result.returncode == 0
+            run1.assert_unrelated_to_current_process()
+
+            with track_state() as run2:
+                result = subprocess.run(["quicken", "run", "--file", str(symlink)])
+
+            assert result.returncode == 0
+            run2.assert_same_parent_as(run1)
+
+            with chdir("a"):
+                with track_state() as run3:
+                    result = subprocess.run(["quicken", "run", "--file", script.name])
 
                 assert result.returncode == 0
-                run1.assert_unrelated_to_current_process()
+                run3.assert_same_parent_as(run1)
 
-                with track_state() as run2:
-                    result = subprocess.run(["quicken", "run", "--file", str(symlink)])
+                with track_state() as run4:
+                    result = subprocess.run(["quicken", "run", "--file", symlink.name])
 
                 assert result.returncode == 0
-                run2.assert_same_parent_as(run1)
-
-                with chdir("a"):
-                    with track_state() as run3:
-                        result = subprocess.run(
-                            ["quicken", "run", "--file", script.name]
-                        )
-
-                    assert result.returncode == 0
-                    run3.assert_same_parent_as(run1)
-
-                    with track_state() as run4:
-                        result = subprocess.run(
-                            ["quicken", "run", "--file", symlink.name]
-                        )
-
-                    assert result.returncode == 0
-                    run4.assert_same_parent_as(run1)
+                run4.assert_same_parent_as(run1)
 
 
-def test_file_path_symlink_modified(log_file_path, quicken_script):
+def test_file_path_symlink_modified(quicken_script, logged):
     # Given a file `script.py`
     # And a symlink `foo` that points to it
     # And the server is already up, having been executed via the symlink
@@ -400,25 +404,24 @@ def test_file_path_symlink_modified(log_file_path, quicken_script):
             new_times = (result.st_atime, result.st_mtime + 1)
             os.utime(path, new_times)
 
-        with env(QUICKEN_LOG=str(log_file_path)):
-            with contained_children():
-                with track_state() as run1:
-                    result = subprocess.run(["quicken", "run", "--file", str(symlink)])
+        with contained_children():
+            with track_state() as run1:
+                result = subprocess.run(["quicken", "run", "--file", str(symlink)])
 
-                assert result.returncode == 0
-                run1.assert_unrelated_to_current_process()
+            assert result.returncode == 0
+            run1.assert_unrelated_to_current_process()
 
-                update_file_mtime(script)
+            update_file_mtime(script)
 
-                with track_state() as run2:
-                    result = subprocess.run(["quicken", "run", "--file", str(symlink)])
+            with track_state() as run2:
+                result = subprocess.run(["quicken", "run", "--file", str(symlink)])
 
-                assert result.returncode == 0
-                run2.assert_unrelated_to_current_process()
-                run2.assert_unrelated_to(run1)
+            assert result.returncode == 0
+            run2.assert_unrelated_to_current_process()
+            run2.assert_unrelated_to(run1)
 
 
-def test_default_idle_timeout_is_used_cli(quicken_script):
+def test_default_idle_timeout_is_used_cli(quicken_script, logged):
     # Given a script
     # And no QUICKEN_IDLE_TIMEOUT is set
     # When the server is started
@@ -454,7 +457,7 @@ def test_default_idle_timeout_is_used_cli(quicken_script):
             assert server_state["idle_timeout"] == DEFAULT_IDLE_TIMEOUT
 
 
-def test_idle_timeout_is_used_cli(quicken_script):
+def test_idle_timeout_is_used_cli(quicken_script, logged):
     # Given a script
     # And no QUICKEN_IDLE_TIMEOUT is set
     # When the server is started
@@ -503,17 +506,15 @@ def test_log_file_unwritable_fails_fast_cli(quicken_script):
         write_text(
             script,
             """
-            import __test_helper__
-
             if __name__ == '__main__':
-                __test_helper__.record()
+                pass
             """,
         )
 
         log_file = Path("example.log")
         log_file.touch(0o000, exist_ok=False)
 
-        with env(QUICKEN_LOG=str(log_file.absolute())):
+        with env(**{ENV_LOG_FILE: str(log_file.absolute())}):
             with contained_children():
                 result = subprocess.run(
                     ["quicken", "run", "--file", script], stderr=subprocess.PIPE

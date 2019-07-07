@@ -1,19 +1,25 @@
 """Test quicken.script and quicken.ctl_script along with associated helpers.
 """
+from __future__ import annotations
+
 import subprocess
 import time
 
-from contextlib import ExitStack
 from pathlib import Path
+from textwrap import dedent
 from typing import Dict
 
 import pytest
 
-from quicken._internal.constants import DEFAULT_IDLE_TIMEOUT
+from quicken._internal.constants import (
+    DEFAULT_IDLE_TIMEOUT,
+    ENV_IDLE_TIMEOUT,
+    ENV_LOG_FILE,
+)
 from quicken._internal.entrypoints import get_attribute_accumulator, ConsoleScriptHelper
 
 from .utils import env, isolated_filesystem, load_json, local_module, write_text
-from .utils.process import active_children, contained_children
+from .utils.process import contained_children
 from .utils.pytest import current_test_name, non_windows
 from .utils.subprocess_helper import track_state
 
@@ -118,180 +124,185 @@ build-backend = "poetry.masonry.api"
 """
 
 
-@pytest.fixture
-def project_venvs(quicken_venv, poetry_build_venv, venvs):
+def test_helper_text(**kwargs):
     def dict_to_dict_literal(d: Dict[str, str]):
         return "{" + ",".join(f"{k!r}: {v!r}" for k, v in d.items()) + "}"
 
-    class Factory:
-        def create(self, **kwargs):
-            """
-            Args:
-                **kwargs: arguments to be passed to 'record'
+    kwargs.setdefault("test_name", current_test_name())
 
-            Returns:
-                venv
-            """
-            venv = venvs.create()
-            venv.use_packages_from(quicken_venv)
-            venv.use_packages_from(poetry_build_venv)
+    formatted_kwargs = dict_to_dict_literal(kwargs)
 
-            path = stack.enter_context(isolated_filesystem())
-            write_text(path / "pyproject.toml", basic_poetry_pyproject)
+    return dedent(
+        f"""
+        def main():
+            from __test_helper__ import record
+            record(**{formatted_kwargs})
+        """
+    )
 
-            kwargs.setdefault("test_name", current_test_name())
 
-            formatted_kwargs = dict_to_dict_literal(kwargs)
+class Project:
+    def __init__(self, base_dir):
+        self._base_dir = base_dir
 
-            write_text(
-                path / "hello.py",
-                f"""
-                def main():
-                    from __test_helper__ import record
-                    record(**{formatted_kwargs})
-                """,
-            )
+    def with_file(self, path, contents):
+        write_text(self._base_dir / path, contents)
+        return self
 
-            venv.install("--no-build-isolation", ".")
+    def install_into(self, venv):
+        venv.install("--no-build-isolation", str(self._base_dir))
+        return InstalledProject(self, venv)
 
-            return venv
+    def with_defaults(self):
+        return self.with_poetry().with_helper_script()
 
-    with ExitStack() as stack:
-        yield Factory()
+    def with_poetry(self):
+        return self.with_pyproject(basic_poetry_pyproject)
+
+    def with_pyproject(self, contents):
+        return self.with_file("pyproject.toml", contents)
+
+    def with_script(self, contents):
+        return self.with_file("hello.py", contents)
+
+    def with_helper_script(self, **kwargs):
+        return self.with_script(test_helper_text(**kwargs))
+
+
+class InstalledProject:
+    def __init__(self, project, venv):
+        self._project = project
+        self._venv = venv
+
+    def run(self, name, *args, **kwargs):
+        return subprocess.run([str(self._venv.path / "bin" / name), *args], **kwargs)
+
+    def run_script(self, **kwargs):
+        return self.run("hello", **kwargs)
+
+    def run_tracked_script(self, **kwargs):
+        with track_state() as run:
+            return self.run_script(**kwargs), run
+
+    def run_ctl_script(self, *args, **kwargs):
+        return self.run("helloctl", *args, **kwargs)
 
 
 @pytest.fixture
-def project_venv(project_venvs):
-    yield project_venvs.create()
+def projects(tmp_path_factory):
+    def _projects():
+        return Project(tmp_path_factory.mktemp("projects"))
+
+    return _projects
+
+
+@pytest.fixture
+def project(projects):
+    return projects()
+
+
+@pytest.fixture
+def poetry_venvs(quicken_venv, poetry_build_venv, venvs):
+    def _poetry_venvs():
+        venv = venvs.create()
+        venv.use_packages_from(quicken_venv)
+        venv.use_packages_from(poetry_build_venv)
+        return venv
+
+    return _poetry_venvs
+
+
+@pytest.fixture
+def poetry_venv(poetry_venvs):
+    return poetry_venvs()
+
+
+@pytest.fixture
+def installed_project(poetry_venv, project):
+    project.with_defaults()
+    return project.install_into(poetry_venv)
 
 
 @non_windows
-def test_script_runs_server(project_venv):
+def test_script_runs_server(installed_project):
     # Given a project that declares a quicken script
     # When the script is executed
     # And the script is executed again
     # Then the script will have been executed in the server
     # And the script will have been executed in the same server the second time
     with contained_children():
-        with track_state() as run1:
-            result = subprocess.run([str(project_venv.path / "bin" / "hello")])
+        result, run1 = installed_project.run_tracked_script()
 
         assert result.returncode == 0
         run1.assert_unrelated_to_current_process()
 
-        with track_state() as run2:
-            result = subprocess.run([str(project_venv.path / "bin" / "hello")])
+        result, run2 = installed_project.run_tracked_script()
 
         assert result.returncode == 0
         run2.assert_unrelated_to_current_process()
         run2.assert_same_parent_as(run1)
 
-        print(active_children())
-
 
 @non_windows
-def test_script_different_venv_different_servers(
-    quicken_venv, poetry_build_venv, venvs
-):
+def test_script_different_venv_different_servers(poetry_venvs, project):
     # Given a project that declares a quicken script
     # And the project is installed in venv1
     # And the project is also installed in venv2
     # When the script in venv1 is executed
     # And the script in venv2 is executed
     # Then they will have been executed by different servers
-    venv = venvs.create()
-    venv.use_packages_from(quicken_venv)
-    venv.use_packages_from(poetry_build_venv)
-    venv2 = venvs.create()
-    venv2.use_packages_from(quicken_venv)
-    venv2.use_packages_from(poetry_build_venv)
+    venv = poetry_venvs()
+    venv2 = poetry_venvs()
 
-    with isolated_filesystem() as path:
-        write_text(path / "pyproject.toml", basic_poetry_pyproject)
+    project.with_defaults()
+    install1 = project.install_into(venv)
+    install2 = project.install_into(venv2)
 
-        write_text(
-            path / "hello.py",
-            """
-            def main():
-                from __test_helper__ import record
-                record()
-            """,
-        )
+    with contained_children():
+        result, run1 = install1.run_tracked_script()
 
-        venv.install("--no-build-isolation", ".")
-        venv2.install("--no-build-isolation", ".")
+        assert result.returncode == 0
+        run1.assert_unrelated_to_current_process()
 
-        with contained_children():
-            with track_state() as run1:
-                result = subprocess.run([str(venv.path / "bin" / "hello")])
+        result, run2 = install2.run_tracked_script()
 
-            assert result.returncode == 0
-            run1.assert_unrelated_to_current_process()
-
-            with track_state() as run2:
-                result = subprocess.run([str(venv2.path / "bin" / "hello")])
-
-            assert result.returncode == 0
-            run1.assert_unrelated_to_current_process()
-            run1.assert_unrelated_to(run2)
+        assert result.returncode == 0
+        run1.assert_unrelated_to_current_process()
+        run1.assert_unrelated_to(run2)
 
 
 @non_windows
-def test_script_reloads_server_on_file_change(quicken_venv, poetry_build_venv, venvs):
+def test_script_reloads_server_on_file_change(poetry_venv, project):
     # Given a problem that declares a quicken script
     # And the project is installed in venv1
     # And the script has already been executed (the server is up)
     # And the project has been updated with a new script
     # When the quicken script is executed
     # Then the command should be executed in a new server
-    venv = venvs.create()
-    venv.use_packages_from(quicken_venv)
-    venv.use_packages_from(poetry_build_venv)
+    project.with_poetry()
+    project.with_helper_script(run="1")
+    install = project.install_into(poetry_venv)
 
-    with isolated_filesystem() as path:
-        write_text(path / "pyproject.toml", basic_poetry_pyproject)
+    with contained_children():
+        result, run1 = install.run_tracked_script()
 
-        write_text(
-            path / "hello.py",
-            """
-            def main():
-                from __test_helper__ import record
-                record(run='1')
-            """,
-        )
+        assert result.returncode == 0
+        assert run1.run == "1"
+        run1.assert_unrelated_to_current_process()
 
-        venv.install("--no-build-isolation", ".")
+        project.with_helper_script(run="2")
+        install = project.install_into(poetry_venv)
 
-        with contained_children():
-            with track_state() as run1:
-                result = subprocess.run([venv.path / "bin" / "hello"])
+        result, run2 = install.run_tracked_script()
 
-            assert result.returncode == 0
-            assert run1.run == "1"
-            run1.assert_unrelated_to_current_process()
-
-            write_text(
-                path / "hello.py",
-                """
-                def main():
-                    from __test_helper__ import record
-                    record(run='2')
-                """,
-            )
-
-            venv.install("--no-build-isolation", path)
-
-            with track_state() as run2:
-                result = subprocess.run([venv.path / "bin" / "hello"])
-
-            assert result.returncode == 0
-            assert run2.run == "2"
-            run2.assert_unrelated_to_current_process()
-            run2.assert_unrelated_to(run1)
+        assert result.returncode == 0
+        assert run2.run == "2"
+        run2.assert_unrelated_to_current_process()
+        run2.assert_unrelated_to(run1)
 
 
 @non_windows
-def test_script_respects_idle_timeout(project_venv):
+def test_script_respects_idle_timeout(installed_project):
     # Given a project that declares a quicken script
     # And the project is installed in venv1
     # When the quicken script is executed
@@ -299,17 +310,15 @@ def test_script_respects_idle_timeout(project_venv):
     # Then the server will shut down after that long without
     #  any requests.
     with contained_children():
-        with env(QUICKEN_IDLE_TIMEOUT="0.2"):
-            with track_state() as run1:
-                result = subprocess.run([project_venv.path / "bin" / "hello"])
+        with env(**{ENV_IDLE_TIMEOUT: "0.2"}):
+            result, run1 = installed_project.run_tracked_script()
 
             assert result.returncode == 0
             run1.assert_unrelated_to_current_process()
 
             time.sleep(0.3)
 
-            with track_state() as run2:
-                result = subprocess.run([project_venv.path / "bin" / "hello"])
+            result, run2 = installed_project.run_tracked_script()
 
             assert result.returncode == 0
             run2.assert_unrelated_to_current_process()
@@ -317,30 +326,28 @@ def test_script_respects_idle_timeout(project_venv):
 
 
 @non_windows
-def test_script_uses_default_idle_timeout(project_venv):
+def test_script_uses_default_idle_timeout(installed_project):
     # Given a project that declares a quicken script
     # And the project is installed in venv1
     # When the quicken script is executed
     # And QUICKEN_IDLE_TIMEOUT is not set
     # Then the default idle timeout will be used
     with contained_children():
-        with env(QUICKEN_IDLE_TIMEOUT=None):
-            with track_state() as run1:
-                result = subprocess.run([project_venv.path / "bin" / "hello"])
+        with env(**{ENV_IDLE_TIMEOUT: None}):
+            result, run1 = installed_project.run_tracked_script()
 
             assert result.returncode == 0
             run1.assert_unrelated_to_current_process()
 
-            result = subprocess.run(
-                [project_venv.path / "bin" / "helloctl", "status", "--json"],
-                stdout=subprocess.PIPE,
+            result = installed_project.run_ctl_script(
+                "status", "--json", stdout=subprocess.PIPE
             )
+
             assert result.returncode == 0
             parsed_output = load_json(result.stdout)
             assert parsed_output["idle_timeout"] == DEFAULT_IDLE_TIMEOUT
 
-            with track_state() as run2:
-                result = subprocess.run([project_venv.path / "bin" / "hello"])
+            result, run2 = installed_project.run_tracked_script()
 
             assert result.returncode == 0
             run2.assert_unrelated_to_current_process()
@@ -348,70 +355,65 @@ def test_script_uses_default_idle_timeout(project_venv):
 
 
 @non_windows
-def test_log_file_unwritable_fails_fast_script(project_venv):
+def test_log_file_unwritable_fails_fast_script(poetry_venv, project):
     # Given a QUICKEN_LOG path pointing to a location that is not writable
     # And the server is not up
     # When the decorated function is executed
     # Then an exception should be indicated
+    project.with_poetry()
+    project.with_script("main = lambda: None")
+    install = project.install_into(poetry_venv)
 
     with isolated_filesystem() as path:
         log_file = path / "quicken.log"
         log_file.touch(0o000)
 
-        with env(QUICKEN_LOG=str(log_file)):
-            result = subprocess.run([project_venv.path / "bin" / "hello"])
-            assert result.returncode != 0
+        with env(**{ENV_LOG_FILE: str(log_file)}):
+            result = install.run_script()
+            assert result.returncode == 1
 
 
 @non_windows
-def test_control_script_status(project_venv):
+def test_control_script_status(installed_project):
     # Given a project that declares a quicken and quicken-ctl script
     # And the server is up
     # When the quicken-ctl script is executed with status
     # Then the server status will be output
     # And the same server will be used for a subsequent command
     with contained_children():
-        result = subprocess.run(
-            [project_venv.path / "bin" / "helloctl", "status"], stdout=subprocess.PIPE
-        )
+        result = installed_project.run_ctl_script("status", stdout=subprocess.PIPE)
         assert result.returncode == 0
         assert "Status: 'down'" in result.stdout.decode("utf-8")
 
-        result = subprocess.run(
-            [project_venv.path / "bin" / "helloctl", "status", "--json"],
-            stdout=subprocess.PIPE,
+        result = installed_project.run_ctl_script(
+            "status", "--json", stdout=subprocess.PIPE
         )
         assert result.returncode == 0
         parsed_output = load_json(result.stdout)
         assert len(parsed_output) == 1
         assert parsed_output["status"] == "down"
 
-        with track_state() as run1:
-            result = subprocess.run([project_venv.path / "bin" / "hello"])
+        result, run1 = installed_project.run_tracked_script()
 
         assert result.returncode == 0
         assert run1.test_name == current_test_name()
         run1.assert_unrelated_to_current_process()
 
-        result = subprocess.run(
-            [project_venv.path / "bin" / "helloctl", "status"], stdout=subprocess.PIPE
-        )
+        result = installed_project.run_ctl_script("status", stdout=subprocess.PIPE)
         assert result.returncode == 0
         stdout = result.stdout.decode("utf-8")
         assert "Status: 'up'" in stdout
         assert f"Pid: {run1.ppid}" in stdout
 
-        result = subprocess.run(
-            [project_venv.path / "bin" / "helloctl", "status", "--json"],
-            stdout=subprocess.PIPE,
+        result = installed_project.run_ctl_script(
+            "status", "--json", stdout=subprocess.PIPE
         )
         assert result.returncode == 0
         parsed_output = load_json(result.stdout)
         assert parsed_output["pid"] == run1.ppid
         assert parsed_output["status"] == "up"
 
-        with track_state() as run2:
-            result = subprocess.run([project_venv.path / "bin" / "hello"])
+        result, run2 = installed_project.run_tracked_script()
 
         # Ensure same server is used after status check.
         assert result.returncode == 0
@@ -421,30 +423,25 @@ def test_control_script_status(project_venv):
 
 
 @non_windows
-def test_control_script_stop(project_venv):
+def test_control_script_stop(installed_project):
     # Given a project that declares a quicken and quicken-ctl script
     # And the server is up
     # When the quicken-ctl script is executed with stop
     # Then the server will stop
     # And the next command will be run with a new server
     with contained_children():
-        with track_state() as run1:
-            result = subprocess.run([project_venv.path / "bin" / "hello"])
+        result, run1 = installed_project.run_tracked_script()
 
         assert result.returncode == 0
         assert run1.test_name == current_test_name()
         run1.assert_unrelated_to_current_process()
 
-        result = subprocess.run(
-            [project_venv.path / "bin" / "helloctl", "stop"], stdout=subprocess.PIPE
-        )
+        result = installed_project.run_ctl_script("stop")
 
         assert result.returncode == 0
 
-        with track_state() as run2:
-            result = subprocess.run([project_venv.path / "bin" / "hello"])
+        result, run2 = installed_project.run_tracked_script()
 
-        # Ensure same server is used after status check.
         assert result.returncode == 0
         assert run2.test_name == current_test_name()
         run2.assert_unrelated_to_current_process()

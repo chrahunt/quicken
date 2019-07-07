@@ -34,7 +34,7 @@ def test_something():
 ```
 """
 from quicken._internal.decorator import quicken
-from quicken._internal._logging import default_configuration, reset_configuration
+from quicken._internal.cli._logging import default_configuration, reset_configuration
 
 from ..conftest import get_log_file
 from ..utils import env, preserved_signals
@@ -59,8 +59,7 @@ def cli_factory(name=_default_name, **kwargs):
                 return func()
 
         def logging_setup_wrapper():
-            with env(QUICKEN_LOG=str(get_log_file())):
-                default_configuration()
+            default_configuration(str(get_log_file()))
             try:
                 return quicken(name, **kwargs)(execute_with_preserved_signals)()
             finally:

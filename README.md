@@ -58,9 +58,6 @@ The server is identified using the full path to the script.
    Python which sets it to the path provided on the command line. This is so the
    code before `if __name__ == '__main__'` and the code after it see the same path
    even if changing directories or the path provided to the command.
-2. By default the server will shut down after 24 hours of inactivity. This can be adjusted
-   by setting `QUICKEN_IDLE_TIMEOUT` to the desired time (in seconds) before invoking the
-   command that starts the server.
 
 ### `quicken.script`
 
@@ -115,12 +112,6 @@ hello = "hello.cli:main"
 helloc = "quicken.script:hello.cli._.main"
 ```
 
-#### Notes
-
-1. By default the server will shut down after 24 hours of inactivity. This can be adjusted
-   by setting `QUICKEN_IDLE_TIMEOUT` to the desired time (in seconds) before invoking the
-   command that starts the server.
-
 ### `quicken.ctl_script`
 
 Similar to the above, using `quicken.ctl_script` provides a CLI to stop and
@@ -146,6 +137,18 @@ setup(
 
 Then we can use `helloctl status` to see the server status information and
 `helloctl stop` to stop the application server.
+
+### Options
+
+Quicken has several options regardless of how it is invoked:
+
+* logging - set `QUICKEN_LOG_FILE` to an absolute file path and debug logs will
+  be traced to it. Note that server logs will only be traced if this environment
+  variable is set for the command that starts the server.
+* idle timeout - by default any quicken server will shut down after 24 hours of
+  inactivity. This can be changed by setting `QUICKEN_IDLE_TIMEOUT` to the desired
+  time (in seconds). This will only take effect if this environment variable is set
+  for the command that starts the server.
 
 # Why
 

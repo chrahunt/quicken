@@ -17,7 +17,8 @@ import operator
 import os
 import sys
 
-from ._internal.constants import DEFAULT_IDLE_TIMEOUT, ENV_IDLE_TIMEOUT
+from ._internal.cli._logging import default_configuration
+from ._internal.constants import DEFAULT_IDLE_TIMEOUT, ENV_IDLE_TIMEOUT, ENV_LOG_FILE
 from ._internal.entrypoints import ConsoleScriptHelper, console_script
 
 
@@ -29,6 +30,8 @@ def callback(helper: ConsoleScriptHelper):
     from ._internal.decorator import quicken
 
     idle_timeout = float(os.environ.get(ENV_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT))
+
+    default_configuration(os.environ.get(ENV_LOG_FILE))
 
     wrapper = quicken(
         helper.name,
