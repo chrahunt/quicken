@@ -28,7 +28,7 @@ class Modules:
     @property
     def asyncio(self) -> asyncio:
         # Saves up to 5ms, and we don't use tls.
-        with patch_modules(modules=['ssl']):
+        with patch_modules(modules=["ssl"]):
             import asyncio
         return asyncio
 
@@ -36,7 +36,7 @@ class Modules:
     def InterProcessLock(self) -> Type[InterProcessLock]:
         # Saves 2ms since we don't use the decorators.
         # We should probably just write our own at this point.
-        with patch_modules(modules=['six']):
+        with patch_modules(modules=["six"]):
             from fasteners import InterProcessLock
         return InterProcessLock
 
@@ -46,7 +46,8 @@ class Modules:
         # Pre-load multiprocessing.reduction so the same shared pickler state is
         # available everywhere.
         import multiprocessing.reduction
-        with patch_modules(modules=['tempfile']):
+
+        with patch_modules(modules=["tempfile"]):
             import multiprocessing.connection
         return multiprocessing.connection
 

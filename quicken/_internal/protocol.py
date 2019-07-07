@@ -14,8 +14,8 @@ if MYPY_CHECK_RUNNING:
 
 
 class RequestTypes:
-    run_process = 'run_process'
-    wait_process_done = 'wait_process_done'
+    run_process = "run_process"
+    wait_process_done = "wait_process_done"
 
 
 class Request:
@@ -48,11 +48,7 @@ class StdStreams:
         invokes _io.FileIO.__getstate__ which unconditionally raises an exception
         ('cannot serialize _io.FileIO') in Python 3.7 and below.
         """
-        return (
-            dumps(self.stdin),
-            dumps(self.stdout),
-            dumps(self.stderr),
-        )
+        return (dumps(self.stdin), dumps(self.stdout), dumps(self.stderr))
 
     def __setstate__(self, state):
         self.stdin = loads(state[0])
@@ -98,6 +94,7 @@ class ProcessState:
                         h.stream = stdout
                     elif h.stream == sys.stderr:
                         h.stream = stderr
+
         # For 'manager' property.
         # noinspection PyUnresolvedReferences
         loggers = logging.Logger.manager.loggerDict
@@ -112,8 +109,11 @@ class ProcessState:
     def apply_to_current_process(state: ProcessState):
         streams = state.std_streams
         __class__._reset_loggers(streams.stdout, streams.stderr)
-        sys.stdin, sys.stdout, sys.stderr = \
-            streams.stdin, streams.stdout, streams.stderr
+        sys.stdin, sys.stdout, sys.stderr = (
+            streams.stdin,
+            streams.stdout,
+            streams.stderr,
+        )
         os.chdir(str(state.cwd))
         os.umask(state.umask)
         os.environ = copy.deepcopy(state.environment)

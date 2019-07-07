@@ -61,17 +61,17 @@ logger = logging.getLogger(__name__)
 
 
 def run(name, metadata, callback, reload_callback=None):
-    report('start quicken load')
+    report("start quicken load")
     from ..decorator import quicken
-    report('end quicken load')
+
+    report("end quicken load")
 
     if reload_callback is None:
+
         def reload_callback(old_data, new_data):
             return old_data != new_data
 
-    idle_timeout = float(
-        os.environ.get(ENV_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT)
-    )
+    idle_timeout = float(os.environ.get(ENV_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT))
 
     decorator = quicken(
         name,
@@ -94,7 +94,7 @@ def parse_file(path: str) -> Tuple[Callable, Callable]:
     let main see all the things defined by prelude.
     """
     path = os.path.abspath(path)
-    with open(path, 'rb') as f:
+    with open(path, "rb") as f:
         text = f.read()
 
     root = ast.parse(text, filename=path)
@@ -104,19 +104,12 @@ def parse_file(path: str) -> Tuple[Callable, Callable]:
     else:
         raise RuntimeError('Must have if __name__ == "__main__":')
 
-    prelude = ast.copy_location(
-        ast.Module(root.body[:i]), root
-    )
-    main_part = ast.copy_location(
-        ast.Module(root.body[i:]), root
-    )
+    prelude = ast.copy_location(ast.Module(root.body[:i]), root)
+    main_part = ast.copy_location(ast.Module(root.body[i:]), root)
     prelude_code = compile(prelude, filename=path, dont_inherit=True, mode="exec")
     main_code = compile(main_part, filename=path, dont_inherit=True, mode="exec")
     # Shared context.
-    context = {
-        '__name__': '__main__',
-        '__file__': path,
-    }
+    context = {"__name__": "__main__", "__file__": path}
     prelude_func = partial(exec, prelude_code, context)
     main_func = partial(exec, main_code, context)
     return prelude_func, main_func
@@ -130,41 +123,41 @@ class PathHandler:
             args: arguments to be used for the sub-process
         Raises:
         """
-        report('start handle_path()')
+        report("start handle_path()")
         self._path_arg = path
 
         path = os.path.abspath(path)
         self._path = path
 
         real_path = os.path.realpath(path)
-        digest = sha512(real_path.encode('utf-8')).hexdigest()
-        self._name = f'quicken.file.{digest}'
+        digest = sha512(real_path.encode("utf-8")).hexdigest()
+        self._name = f"quicken.file.{digest}"
 
         stat_result = os.stat(real_path)
 
-        logger.debug('Digest: %s', digest)
+        logger.debug("Digest: %s", digest)
 
         self._metadata = {
-            'path': path,
-            'real_path': real_path,
-            'ctime': stat_result[stat.ST_CTIME],
-            'mtime': stat_result[stat.ST_MTIME],
+            "path": path,
+            "real_path": real_path,
+            "ctime": stat_result[stat.ST_CTIME],
+            "mtime": stat_result[stat.ST_MTIME],
         }
 
-        logger.debug('Metadata: %s', self._metadata)
+        logger.debug("Metadata: %s", self._metadata)
 
     @property
     def argv_prefix(self):
         return [self._path_arg]
 
     def main(self):
-        report('start file parsing')
+        report("start file parsing")
         prelude_code, main_code = parse_file(self._path)
-        report('end file parsing')
+        report("end file parsing")
         # Execute everything before if __name__ == '__main__':
-        report('start prelude execute')
+        report("start prelude execute")
         prelude_code()
-        report('end prelude execute')
+        report("end prelude execute")
         # Pass main back to be executed by the server.
         return main_code
 
@@ -178,8 +171,8 @@ class PathHandler:
 
     def reload_callback(self, old_data, new_data):
         return (
-            old_data['ctime'] != new_data['ctime'] or
-            old_data['mtime'] != new_data['mtime']
+            old_data["ctime"] != new_data["ctime"]
+            or old_data["mtime"] != new_data["mtime"]
         )
 
 
@@ -199,11 +192,8 @@ def _get_module_details(mod_name, error=ImportError):
             # If the parent or higher ancestor package is missing, let the
             # error be raised by find_spec() below and then be caught. But do
             # not allow other errors to be caught.
-            if (
-                e.name is None or (
-                    e.name != pkg_name and
-                    not pkg_name.startswith(e.name + ".")
-                )
+            if e.name is None or (
+                e.name != pkg_name and not pkg_name.startswith(e.name + ".")
             ):
                 raise
 
@@ -211,10 +201,13 @@ def _get_module_details(mod_name, error=ImportError):
         existing = sys.modules.get(mod_name)
         if existing is not None and not hasattr(existing, "__path__"):
             from warnings import warn
-            msg = "{mod_name!r} found in sys.modules after import of " \
-                "package {pkg_name!r}, but prior to execution of " \
-                "{mod_name!r}; this may result in unpredictable " \
+
+            msg = (
+                "{mod_name!r} found in sys.modules after import of "
+                "package {pkg_name!r}, but prior to execution of "
+                "{mod_name!r}; this may result in unpredictable "
                 "behaviour".format(mod_name=mod_name, pkg_name=pkg_name)
+            )
             warn(RuntimeWarning(msg))
 
     try:
@@ -236,12 +229,13 @@ def _get_module_details(mod_name, error=ImportError):
         except error as e:
             if mod_name not in sys.modules:
                 raise  # No module loaded; being a package is irrelevant
-            raise error(("%s; %r is a package and cannot " +
-                               "be directly executed") %(e, mod_name))
+            raise error(
+                ("%s; %r is a package and cannot " + "be directly executed")
+                % (e, mod_name)
+            )
     loader = spec.loader
     if loader is None:
-        raise error("%r is a namespace package and cannot be executed"
-                                                                 % mod_name)
+        raise error("%r is a namespace package and cannot be executed" % mod_name)
     return mod_name, spec
 
 
@@ -263,8 +257,9 @@ class ModuleHandler:
     this will only cause problems if some tool has order-dependent imports underneath e.g. a
     platform check and we can trace a warning if that is the case.
     """
+
     def __init__(self, module_name, args):
-        report('start ModuleHandler')
+        report("start ModuleHandler")
         self._module_name, self._spec = _get_module_details(module_name)
 
     def main(self):
@@ -277,46 +272,45 @@ class ModuleHandler:
             raise ImportError("No code object available for %s" % self._module_name)
 
 
-RUN_COMMAND = 'run'
+RUN_COMMAND = "run"
 
 
 def get_arg_parser():
     def add_command_type_group(parser):
         selector = parser.add_mutually_exclusive_group(required=True)
-        selector.add_argument('--file', help='path to script')
-        #selector.add_argument('--entrypoint', help='spec as would be provided to console_scripts')
-        #selector.add_argument('--from-path', help='name of command to search for in PATH')
+        selector.add_argument("--file", help="path to script")
+        # selector.add_argument('--entrypoint', help='spec as would be provided to console_scripts')
+        # selector.add_argument('--from-path', help='name of command to search for in PATH')
         return selector
 
     parser = argparse.ArgumentParser(
-        description='Run Python commands in an application server.'
+        description="Run Python commands in an application server."
     )
 
     subparsers = parser.add_subparsers(
-        description='',
-        dest='action',
-        metavar='<subcommand>',
-        required=True
+        description="", dest="action", metavar="<subcommand>", required=True
     )
 
     run_parser = subparsers.add_parser(
-        RUN_COMMAND, description='Run a command on a quicken server.', help='run code'
+        RUN_COMMAND, description="Run a command on a quicken server.", help="run code"
     )
     add_command_type_group(run_parser)
     run_parser.add_argument(
-        'args',
-        help='arguments to pass to the underlying command',
+        "args",
+        help="arguments to pass to the underlying command",
         nargs=argparse.REMAINDER,
     )
 
     status_parser = subparsers.add_parser(
-        Commands.STATUS, description='Get server status.', help='get server status'
+        Commands.STATUS, description="Get server status.", help="get server status"
     )
     add_command_type_group(status_parser)
-    status_parser.add_argument('--json', action='store_true', help='output status data as JSON')
+    status_parser.add_argument(
+        "--json", action="store_true", help="output status data as JSON"
+    )
 
     stop_parser = subparsers.add_parser(
-        Commands.STOP, description='Stop server.', help='stop server if it is running'
+        Commands.STOP, description="Stop server.", help="stop server if it is running"
     )
     add_command_type_group(stop_parser)
 
@@ -324,7 +318,7 @@ def get_arg_parser():
 
 
 def main():
-    report('start main()')
+    report("start main()")
 
     parser = get_arg_parser()
     args = parser.parse_args()
@@ -338,14 +332,14 @@ def main():
         path = args.file
 
         if not os.access(path, os.R_OK):
-            parser.error(f'Cannot read {path}')
+            parser.error(f"Cannot read {path}")
 
         try:
             handler = PathHandler(path)
         except FileNotFoundError:
-            parser.error(f'{path} does not exist')
+            parser.error(f"{path} does not exist")
 
-    #elif args.m:
+    # elif args.m:
     #    # We do not have a good strategy for avoiding import of the parent module
     #    # so for now just reject.
     #    if '.' in args.m:
@@ -355,7 +349,7 @@ def main():
     if args.action == RUN_COMMAND:
         cmd_args = args.args
         # argparse.REMAINDER leaves a leading --.
-        if cmd_args and cmd_args[0] == '--':
+        if cmd_args and cmd_args[0] == "--":
             cmd_args.pop(0)
         # Reset sys.argv for quicken propagation.
         # noinspection PyUnboundLocalVariable

@@ -3,7 +3,7 @@ trigger:
 
 variables:
   # Primary virtual environment used for poetry.
-  # Also made available to .ap/scripts/python.py to resolve to the correct
+  # Also made available to .azure-pipelines/scripts/python.py to resolve to the correct
   #  Python.
   venv: .poetry
   app_venv: .venv
@@ -52,25 +52,25 @@ jobs:
   - task: PythonScript@0
     displayName: Setup Poetry 1
     inputs:
-      scriptPath: .ap/scripts/python.py
+      scriptPath: .azure-pipelines/scripts/python.py
       arguments: -m pip install --upgrade pip
 
   - task: PythonScript@0
     displayName: Setup Poetry 2
     inputs:
-      scriptPath: .ap/scripts/python.py
+      scriptPath: .azure-pipelines/scripts/python.py
       arguments: -m pip install --upgrade poetry
 
   - task: PythonScript@0
     displayName: Configure Poetry 1
     inputs:
-      scriptPath: .ap/scripts/python.py
+      scriptPath: .azure-pipelines/scripts/python.py
       arguments: -m poetry config settings.virtualenvs.in-project true
 
   - task: PythonScript@0
     displayName: Configure Poetry 2
     inputs:
-      scriptPath: .ap/scripts/python.py
+      scriptPath: .azure-pipelines/scripts/python.py
       arguments: -m poetry config settings.virtualenvs.path $(app_venv)
 
     # Letting Python install the virtual environment works around an issue
@@ -81,7 +81,7 @@ jobs:
   - task: PythonScript@0
     displayName: Install/update dependencies
     inputs:
-      scriptPath: .ap/scripts/python.py
+      scriptPath: .azure-pipelines/scripts/python.py
       arguments: -m poetry install
 
     # If dependency resolution succeeded, cache.
@@ -104,7 +104,7 @@ jobs:
   - task: PythonScript@0
     displayName: Run tests
     inputs:
-      scriptPath: .ap/scripts/python.py
+      scriptPath: .azure-pipelines/scripts/python.py
       arguments: -m poetry run python -m pytest -ra --junitxml=junit/test-results.xml tests
 
   - task: PublishTestResults@2
@@ -124,11 +124,20 @@ jobs:
     displayName: Publish logs
 
   - task: PythonScript@0
+    displayName: Linting
+    inputs:
+      scriptPath: .azure-pipelines/scripts/python.py
+      arguments: -m poetry run black --check --diff quicken tests
+    # Avoid hanging on Windows, we only need one platform anyway. See
+    # buildId 169.
+    condition: and(succeeded(), eq(variables['Agent.OS'], 'Linux'))
+
+  - task: PythonScript@0
     displayName: Build
     inputs:
-      scriptPath: .ap/scripts/python.py
+      scriptPath: .azure-pipelines/scripts/python.py
       arguments: -m poetry build
-  
+
   - task: PublishPipelineArtifact@0
     inputs:
       artifactName: 'artifacts_$(python.version)_$(Agent.OS)'

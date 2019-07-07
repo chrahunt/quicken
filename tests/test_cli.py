@@ -45,13 +45,13 @@ def sys_path(path):
 
 def test_args_passthru():
     parser = get_arg_parser()
-    args = parser.parse_args(['run', '--file', './script.py', '--', '--help'])
-    assert args.action == 'run'
-    assert args.file == './script.py'
-    assert args.args == ['--', '--help']
+    args = parser.parse_args(["run", "--file", "./script.py", "--", "--help"])
+    assert args.action == "run"
+    assert args.file == "./script.py"
+    assert args.args == ["--", "--help"]
 
 
-#def test_args_module_passthru():
+# def test_args_module_passthru():
 #    _, args = parse_args(['-m', 'pytest', '--', '-s', '-ra'])
 #    assert args.m == 'pytest'
 #    assert args.args == ['-s', '-ra']
@@ -59,9 +59,9 @@ def test_args_passthru():
 
 def test_file_args_passthru():
     parser = get_arg_parser()
-    args = parser.parse_args(['stop', '--file', 'foo'])
-    assert args.action == 'stop'
-    assert args.file == 'foo'
+    args = parser.parse_args(["stop", "--file", "foo"])
+    assert args.action == "stop"
+    assert args.file == "foo"
 
 
 def test_file_evaluation():
@@ -83,25 +83,22 @@ def test_file_evaluation():
     #
     # should print 1
     with local_module():
-        module = Path('hello')
+        module = Path("hello")
         module.mkdir()
+        write_text(module / "__init__.py", "foo = 1")
+        write_text(module / "foo.py", "")
         write_text(
-            module / '__init__.py',
-            'foo = 1',
-        )
-        write_text(module / 'foo.py', '')
-        write_text(
-            Path('script.py'),
-            '''
+            Path("script.py"),
+            """
             from hello import foo
             import hello.foo
 
             if __name__ == '__main__':
                 print(foo)
-            '''
+            """,
         )
 
-        prelude, main = parse_file('script.py')
+        prelude, main = parse_file("script.py")
 
         prelude()
 
@@ -109,7 +106,7 @@ def test_file_evaluation():
             main()
 
         output = stdout.read()
-        assert output == '1\n'
+        assert output == "1\n"
 
 
 def pytest_exception_location(exc_info):
@@ -126,24 +123,24 @@ def test_file_prelude_backtrace_line_numbering():
     # And the line number should match the line in the file
     with isolated_filesystem():
         write_text(
-            Path('script.py'),
-            '''\
+            Path("script.py"),
+            """\
             import os
             raise RuntimeError('example')
 
             if __name__ == '__main__':
                 raise RuntimeError('example2')
-            '''
+            """,
         )
 
-        prelude, main = parse_file('script.py')
+        prelude, main = parse_file("script.py")
 
         with pytest.raises(RuntimeError) as e:
             prelude()
 
-        assert 'example' in str(e)
+        assert "example" in str(e)
         filename, lineno = pytest_exception_location(e)
-        assert filename == str(Path('script.py').absolute())
+        assert filename == str(Path("script.py").absolute())
         assert lineno == 2
 
 
@@ -155,17 +152,17 @@ def test_file_main_backtrace_line_numbering():
     # And the line number should match the line in the file
     with isolated_filesystem():
         write_text(
-            Path('script.py'),
-            '''\
+            Path("script.py"),
+            """\
             import os
 
             if __name__ == '__main__':
                 os.getpid
                 raise RuntimeError('example')
-            '''
+            """,
         )
 
-        prelude, main = parse_file('script.py')
+        prelude, main = parse_file("script.py")
 
         prelude()
 
@@ -173,7 +170,7 @@ def test_file_main_backtrace_line_numbering():
             main()
 
         filename, lineno = pytest_exception_location(e)
-        assert filename == str(Path('script.py').absolute())
+        assert filename == str(Path("script.py").absolute())
         assert lineno == 5
 
 
@@ -183,37 +180,35 @@ def test_python_sets_file_path_using_argument():
     # When python executes <target> from <cwd>
     # Then __file__ should be <__file__>
     with isolated_filesystem() as path:
-        parent = path / 'a'
+        parent = path / "a"
         parent.mkdir()
-        script = parent / 'script.py'
+        script = parent / "script.py"
         write_text(
             script,
-            '''
+            """
             print(__file__)
-            '''
+            """,
         )
 
-        symlink = parent / 'foo'
+        symlink = parent / "foo"
         symlink.symlink_to(script.name)
 
         cases = [
-            ['a', symlink.name],
-            ['a', symlink],
-            ['a', script.name],
-            ['a', script],
-            ['.', f'a/{symlink.name}'],
-            ['.', symlink],
-            ['.', f'a/{script.name}'],
-            ['.', script],
+            ["a", symlink.name],
+            ["a", symlink],
+            ["a", script.name],
+            ["a", script],
+            [".", f"a/{symlink.name}"],
+            [".", symlink],
+            [".", f"a/{script.name}"],
+            [".", script],
         ]
 
         for cwd, file in cases:
             result = subprocess.run(
-                [sys.executable, file],
-                stdout=subprocess.PIPE,
-                cwd=cwd,
+                [sys.executable, file], stdout=subprocess.PIPE, cwd=cwd
             )
-            output = result.stdout.decode('utf-8').strip()
+            output = result.stdout.decode("utf-8").strip()
             assert output == str(file)
 
 
@@ -223,15 +218,15 @@ def test_file_path_set_absolute():
     # When executed with the results of parse_file
     # Then __file__ should be the full, resolved path to the file
     with isolated_filesystem() as path:
-        script = path / 'script.py'
+        script = path / "script.py"
         write_text(
             script,
-            '''
+            """
             print(__file__)
 
             if __name__ == '__main__':
                 print(__file__)
-            '''
+            """,
         )
 
         prelude, main = parse_file(str(script))
@@ -253,18 +248,18 @@ def test_file_path_symlink_uses_resolved_path():
     # When executed with the results of parse_file
     # Then __file__ should be the full, resolved path to the file
     with isolated_filesystem() as path:
-        script = path / 'script.py'
+        script = path / "script.py"
         write_text(
             script,
-            '''
+            """
             print(__file__)
 
             if __name__ == '__main__':
                 print(__file__)
-            '''
+            """,
         )
 
-        symlink = path / 'foo'
+        symlink = path / "foo"
         symlink.symlink_to(script.name)
 
         prelude, main = parse_file(str(script))
@@ -282,9 +277,9 @@ def test_file_path_symlink_uses_resolved_path():
 
 @pytest.fixture
 def quicken_script(quicken_venv):
-    path = os.environ['PATH']
-    bin_dir = quicken_venv.path / 'bin'
-    with env(PATH=f'{bin_dir}:{path}'):
+    path = os.environ["PATH"]
+    bin_dir = quicken_venv.path / "bin"
+    with env(PATH=f"{bin_dir}:{path}"):
         yield
 
 
@@ -293,25 +288,29 @@ def test_file_argv_set(log_file_path, quicken_script):
     # sys.argv should start with `script.py` and be followed by any
     # other arguments
     with isolated_filesystem():
-        Path('script.py').write_text(dedent('''
+        Path("script.py").write_text(
+            dedent(
+                """
         import sys
 
         if __name__ == '__main__':
             print(sys.argv[0])
             print(sys.argv[1])
-        '''))
+        """
+            )
+        )
 
-        args = ['hello']
+        args = ["hello"]
         with env(QUICKEN_LOG=str(log_file_path)):
             with contained_children():
                 result = subprocess.run(
-                    ['quicken', 'run', '--file', 'script.py', 'hello'],
+                    ["quicken", "run", "--file", "script.py", "hello"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
 
-        assert result.returncode == 0, f'process must succeed: {result}'
-        assert result.stdout.decode('utf-8') == f'script.py\n{args[0]}\n'
+        assert result.returncode == 0, f"process must succeed: {result}"
+        assert result.stdout.decode("utf-8") == f"script.py\n{args[0]}\n"
 
 
 def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_script):
@@ -324,44 +323,40 @@ def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_scr
     # And `quicken -f foo` is executed from `a`
     # Then the same server should be used to handle all of them
     with isolated_filesystem():
-        base_dir = Path('a')
+        base_dir = Path("a")
         base_dir.mkdir()
-        script = base_dir / 'script.py'
+        script = base_dir / "script.py"
         write_text(
             script,
-            '''
+            """
             import __test_helper__
 
             if __name__ == '__main__':
                 __test_helper__.record()
-            '''
+            """,
         )
 
-        symlink = base_dir / 'foo'
+        symlink = base_dir / "foo"
         symlink.symlink_to(script.name)
 
         with env(QUICKEN_LOG=str(log_file_path)):
             with contained_children():
                 with track_state() as run1:
-                    result = subprocess.run(
-                        ['quicken', 'run', '--file', str(script)]
-                    )
+                    result = subprocess.run(["quicken", "run", "--file", str(script)])
 
                 assert result.returncode == 0
                 run1.assert_unrelated_to_current_process()
 
                 with track_state() as run2:
-                    result = subprocess.run(
-                        ['quicken', 'run', '--file', str(symlink)]
-                    )
+                    result = subprocess.run(["quicken", "run", "--file", str(symlink)])
 
                 assert result.returncode == 0
                 run2.assert_same_parent_as(run1)
 
-                with chdir('a'):
+                with chdir("a"):
                     with track_state() as run3:
                         result = subprocess.run(
-                            ['quicken', 'run', '--file', script.name]
+                            ["quicken", "run", "--file", script.name]
                         )
 
                     assert result.returncode == 0
@@ -369,7 +364,7 @@ def test_file_server_name_uses_absolute_resolved_path(log_file_path, quicken_scr
 
                     with track_state() as run4:
                         result = subprocess.run(
-                            ['quicken', 'run', '--file', symlink.name]
+                            ["quicken", "run", "--file", symlink.name]
                         )
 
                     assert result.returncode == 0
@@ -384,20 +379,20 @@ def test_file_path_symlink_modified(log_file_path, quicken_script):
     # When the script is executed again via the symlink
     # Then the server will be reloaded
     with isolated_filesystem():
-        base_dir = Path('a')
+        base_dir = Path("a")
         base_dir.mkdir()
-        script = base_dir / 'script.py'
+        script = base_dir / "script.py"
         write_text(
             script,
-            '''
+            """
             import __test_helper__
 
             if __name__ == '__main__':
                 __test_helper__.record()
-            '''
+            """,
         )
 
-        symlink = base_dir / 'foo'
+        symlink = base_dir / "foo"
         symlink.symlink_to(script.name)
 
         def update_file_mtime(path):
@@ -408,9 +403,7 @@ def test_file_path_symlink_modified(log_file_path, quicken_script):
         with env(QUICKEN_LOG=str(log_file_path)):
             with contained_children():
                 with track_state() as run1:
-                    result = subprocess.run(
-                        ['quicken', 'run', '--file', str(symlink)]
-                    )
+                    result = subprocess.run(["quicken", "run", "--file", str(symlink)])
 
                 assert result.returncode == 0
                 run1.assert_unrelated_to_current_process()
@@ -418,9 +411,7 @@ def test_file_path_symlink_modified(log_file_path, quicken_script):
                 update_file_mtime(script)
 
                 with track_state() as run2:
-                    result = subprocess.run(
-                        ['quicken', 'run', '--file', str(symlink)]
-                    )
+                    result = subprocess.run(["quicken", "run", "--file", str(symlink)])
 
                 assert result.returncode == 0
                 run2.assert_unrelated_to_current_process()
@@ -433,36 +424,34 @@ def test_default_idle_timeout_is_used_cli(quicken_script):
     # When the server is started
     # Then it will have the default idle timeout
     with isolated_filesystem():
-        script = Path('script.py')
+        script = Path("script.py")
         write_text(
             script,
-            '''
+            """
             import __test_helper__
 
             if __name__ == '__main__':
                 __test_helper__.record()
-            '''
+            """,
         )
 
         with contained_children():
             with track_state() as run1:
-                result = subprocess.run(
-                    ['quicken', 'run', '--file', str(script)]
-                )
+                result = subprocess.run(["quicken", "run", "--file", str(script)])
 
             assert result.returncode == 0
             run1.assert_unrelated_to_current_process()
 
             result = subprocess.run(
-                ['quicken', 'status', '--json', '--file', str(script)],
+                ["quicken", "status", "--json", "--file", str(script)],
                 stdout=subprocess.PIPE,
             )
 
             assert result.returncode == 0
-            stdout = result.stdout.decode('utf-8')
+            stdout = result.stdout.decode("utf-8")
             server_state = load_json(stdout)
-            assert server_state['status'] == 'up'
-            assert server_state['idle_timeout'] == DEFAULT_IDLE_TIMEOUT
+            assert server_state["status"] == "up"
+            assert server_state["idle_timeout"] == DEFAULT_IDLE_TIMEOUT
 
 
 def test_idle_timeout_is_used_cli(quicken_script):
@@ -471,15 +460,15 @@ def test_idle_timeout_is_used_cli(quicken_script):
     # When the server is started
     # Then it will have the specified idle timeout
     with isolated_filesystem():
-        script = Path('script.py')
+        script = Path("script.py")
         write_text(
             script,
-            '''
+            """
             import __test_helper__
 
             if __name__ == '__main__':
                 __test_helper__.record()
-            '''
+            """,
         )
 
         test_idle_timeout = 100
@@ -488,23 +477,21 @@ def test_idle_timeout_is_used_cli(quicken_script):
             print(os.environ[ENV_IDLE_TIMEOUT])
             with contained_children():
                 with track_state() as run1:
-                    result = subprocess.run(
-                        ['quicken', 'run', '--file', str(script)]
-                    )
+                    result = subprocess.run(["quicken", "run", "--file", str(script)])
 
                 assert result.returncode == 0
                 run1.assert_unrelated_to_current_process()
 
                 result = subprocess.run(
-                    ['quicken', 'status', '--json', '--file', str(script)],
+                    ["quicken", "status", "--json", "--file", str(script)],
                     stdout=subprocess.PIPE,
                 )
 
                 assert result.returncode == 0
-                stdout = result.stdout.decode('utf-8')
+                stdout = result.stdout.decode("utf-8")
                 server_state = load_json(stdout)
-                assert server_state['status'] == 'up'
-                assert server_state['idle_timeout'] == test_idle_timeout
+                assert server_state["status"] == "up"
+                assert server_state["idle_timeout"] == test_idle_timeout
 
 
 def test_log_file_unwritable_fails_fast_cli(quicken_script):
@@ -512,32 +499,31 @@ def test_log_file_unwritable_fails_fast_cli(quicken_script):
     # When the CLI is executed
     # Then it should fail with a nonzero exit code and reasonable message
     with isolated_filesystem():
-        script = Path('script.py')
+        script = Path("script.py")
         write_text(
             script,
-            '''
+            """
             import __test_helper__
 
             if __name__ == '__main__':
                 __test_helper__.record()
-            '''
+            """,
         )
 
-        log_file = Path('example.log')
+        log_file = Path("example.log")
         log_file.touch(0o000, exist_ok=False)
 
         with env(QUICKEN_LOG=str(log_file.absolute())):
             with contained_children():
                 result = subprocess.run(
-                    ['quicken', 'run', '--file', script],
-                    stderr=subprocess.PIPE,
+                    ["quicken", "run", "--file", script], stderr=subprocess.PIPE
                 )
 
             assert result.returncode == 2
 
-            stderr = result.stderr.decode('utf-8')
+            stderr = result.stderr.decode("utf-8")
             assert str(log_file.absolute()) in stderr
-            assert 'not writable' in stderr
+            assert "not writable" in stderr
 
 
 def test_script_file_unreadable_fails_with_error(quicken_script):
@@ -545,16 +531,15 @@ def test_script_file_unreadable_fails_with_error(quicken_script):
     # When the CLI is executed
     # Then it should fail with a nonzero exit code and reasonable message
     with isolated_filesystem():
-        script = Path('script.py')
+        script = Path("script.py")
         script.touch(0o000, exist_ok=False)
 
         with contained_children():
             result = subprocess.run(
-                ['quicken', 'run', '--file', str(script)],
-                stderr=subprocess.PIPE,
+                ["quicken", "run", "--file", str(script)], stderr=subprocess.PIPE
             )
 
         assert result.returncode == 2
-        stderr = result.stderr.decode('utf-8')
+        stderr = result.stderr.decode("utf-8")
         assert str(script) in stderr
-        assert 'Cannot read' in stderr
+        assert "Cannot read" in stderr

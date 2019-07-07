@@ -19,6 +19,7 @@ def test_exit_code_propagated_from_function():
     def runner():
         def inner():
             return 2
+
         return inner
 
     with contained_children():
@@ -30,6 +31,7 @@ def test_exit_code_propagated_on_sys_exit():
     def runner():
         def inner():
             sys.exit(3)
+
         return inner
 
     with contained_children():
@@ -41,6 +43,7 @@ def test_exit_code_propagated_on_sys_exit_0():
     def runner():
         def inner():
             sys.exit(0)
+
         return inner
 
     with contained_children():
@@ -52,6 +55,7 @@ def test_exit_code_propagated_on_sys_exit_none():
     def runner():
         def inner():
             sys.exit()
+
         return inner
 
     with contained_children():
@@ -64,6 +68,7 @@ def test_exit_code_propagated_on_os__exit():
         def inner():
             # noinspection PyProtectedMember
             os._exit(4)
+
         return inner
 
     with contained_children():
@@ -71,11 +76,13 @@ def test_exit_code_propagated_on_os__exit():
 
 
 def test_exit_code_propagated_on_exception():
-    message = 'expected_exception'
+    message = "expected_exception"
+
     @cli_factory(current_test_name())
     def runner():
         def inner():
             raise RuntimeError(message)
+
         return inner
 
     with contained_children():
@@ -95,28 +102,32 @@ def test_exit_code_propagated_on_atexit_sys_exit():
         def inner():
             def func():
                 sys.exit(5)
+
             atexit.register(func)
+
         return inner
 
     with contained_children():
         assert runner() == 0
 
 
-@pytest.mark.xfail(reason='multiprocessing does not support atexit handlers')
+@pytest.mark.xfail(reason="multiprocessing does not support atexit handlers")
 def test_exit_code_propagated_on_atexit_exception():
     @cli_factory(current_test_name())
     def runner():
         def inner():
             def func():
-                raise RuntimeError('expected')
+                raise RuntimeError("expected")
+
             atexit.register(func)
+
         return inner
 
     with contained_children():
         assert runner() == 1
 
 
-@pytest.mark.xfail(reason='multiprocessing does not support atexit handlers')
+@pytest.mark.xfail(reason="multiprocessing does not support atexit handlers")
 def test_exit_code_propagated_on_atexit_os__exit():
     @cli_factory(current_test_name())
     def runner():
@@ -124,7 +135,9 @@ def test_exit_code_propagated_on_atexit_os__exit():
             def func():
                 # noinspection PyProtectedMember
                 os._exit(3)
+
             atexit.register(func)
+
         return inner
 
     with contained_children():
@@ -142,6 +155,7 @@ def test_exit_code_propagated_when_server_gets_sigterm():
         def inner():
             os.kill(os.getppid(), signal.SIGTERM)
             sys.exit(5)
+
         return inner
 
     with contained_children():

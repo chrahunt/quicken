@@ -21,21 +21,20 @@ __all__ = []
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Control and query a quicken server.')
+    parser = argparse.ArgumentParser(description="Control and query a quicken server.")
     subparsers = parser.add_subparsers(
-        description='',
-        dest='action',
-        metavar='<subcommand>',
-        required=True,
+        description="", dest="action", metavar="<subcommand>", required=True
     )
 
     status_parser = subparsers.add_parser(
-        Commands.STATUS, description='Get server status.', help='get server status'
+        Commands.STATUS, description="Get server status.", help="get server status"
     )
-    status_parser.add_argument('--json', action='store_true', help='output status data as JSON')
+    status_parser.add_argument(
+        "--json", action="store_true", help="output status data as JSON"
+    )
 
     subparsers.add_parser(
-        Commands.STOP, description='Stop server.', help='stop server if it is running'
+        Commands.STOP, description="Stop server.", help="stop server if it is running"
     )
 
     return parser.parse_args()

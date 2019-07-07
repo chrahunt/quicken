@@ -17,13 +17,14 @@ from .path import BoundPath, chdir
 logger = logging.getLogger(__name__)
 
 
-if not sys.platform.startswith('win'):
+if not sys.platform.startswith("win"):
     import watchdog.observers.inotify_buffer
+
     # Fix for https://github.com/gorakhargosh/watchdog/issues/390
     watchdog.observers.inotify_buffer.InotifyBuffer.delay = 0
 
 
-Action = namedtuple('Action', 'path present')
+Action = namedtuple("Action", "path present")
 
 
 def wait_for_create(path: Union[BoundPath, Path], timeout: float = 5) -> bool:
@@ -40,30 +41,30 @@ def _wait_for(action: Action, timeout: float = 5) -> bool:
 
     class Handler(FileSystemEventHandler):
         def on_deleted(self, _event):
-            logger.debug('on_deleted')
+            logger.debug("on_deleted")
             if action_check():
-                logger.debug('Stopping observer')
+                logger.debug("Stopping observer")
                 observer.stop()
 
         def on_created(self, _event):
-            logger.debug('on_created')
+            logger.debug("on_created")
             if action_check():
-                logger.debug('Stopping observer')
+                logger.debug("Stopping observer")
                 observer.stop()
 
     # Start observer first, otherwise we may receive unwatched events between
     # check and observer start.
-    if hasattr(action.path, 'dir'):
+    if hasattr(action.path, "dir"):
         parent = action.path.dir
     elif isinstance(action.path, Path):
         parent = action.path.parent
     else:
-        raise TypeError('path must be BoundPath or Path')
+        raise TypeError("path must be BoundPath or Path")
 
     with chdir(parent):
         observer = Observer(timeout=0)
         # This correctly uses cwd as long as we start before changing directory.
-        observer.schedule(Handler(), '.')
+        observer.schedule(Handler(), ".")
         observer.start()
 
         # Sanity check.
@@ -79,9 +80,9 @@ def _wait_for(action: Action, timeout: float = 5) -> bool:
     signal.setitimer(signal.ITIMER_REAL, timeout)
 
     # Will be killed by timer or event handler.
-    logger.debug('Joining observer')
+    logger.debug("Joining observer")
     observer.join()
-    logger.debug('Observer returned')
+    logger.debug("Observer returned")
 
     signal.setitimer(signal.ITIMER_REAL, 0)
     signal.signal(signal.SIGALRM, signal.SIG_DFL)

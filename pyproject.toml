@@ -36,6 +36,7 @@ pytest-benchmark = "^3.2"
 m2r = "^0.2.1"
 pygments-github-lexers = "^0.0.5"
 python-ptrace = "^0.9.3"
+black = {version = "^18.3-alpha.0",allows-prereleases = true}
 
 [tool.poetry.scripts]
 quicken = "quicken._internal.cli.cli:main"

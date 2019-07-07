@@ -8,6 +8,7 @@ import pytest
 
 # noinspection PyProtectedMember
 from quicken._internal._multiprocessing import run_in_process
+
 # noinspection PyProtectedMember
 from quicken._internal._multiprocessing_reduction import (
     dumps,
@@ -26,21 +27,22 @@ pytestmark = non_windows
 
 def test_function_is_executed_in_separate_process():
     with isolated_filesystem() as path:
+
         def runner():
-            pidfile.write_text(str(os.getpid()), encoding='utf-8')
-        pidfile = Path(path) / 'pid.txt'
+            pidfile.write_text(str(os.getpid()), encoding="utf-8")
+
+        pidfile = Path(path) / "pid.txt"
         run_in_process(target=runner)
         main_pid = str(os.getpid())
-        runner_pid = pidfile.read_text(encoding='utf-8')
-        assert runner_pid, 'Runner pid must have been set'
-        assert main_pid != runner_pid, \
-            'Function must have been run in separate process'
+        runner_pid = pidfile.read_text(encoding="utf-8")
+        assert runner_pid, "Runner pid must have been set"
+        assert main_pid != runner_pid, "Function must have been run in separate process"
 
 
 # XXX: Kind of ugly, as the exception information is shown in stderr by
 #  multiprocessing.
 def test_function_exception_is_reraised():
-    message = 'example message'
+    message = "example message"
 
     def runner():
         raise RuntimeError(message)
@@ -61,7 +63,7 @@ def test_function_return_value_is_returned():
 
 
 def test_function_gets_args():
-    arg = '123'
+    arg = "123"
 
     def runner(s):
         return s
@@ -87,19 +89,19 @@ def test_function_detach_works():
 
     with contained_children():
         run_in_process(runner, allow_detach=True)
-        assert not multiprocessing.active_children(), \
-            'Multiprocessing should not see active children'
+        assert (
+            not multiprocessing.active_children()
+        ), "Multiprocessing should not see active children"
 
-        assert active_children(), \
-            'Process should still be up'
+        assert active_children(), "Process should still be up"
 
 
 @pytest.mark.timeout(5)
 def test_textiowrapper_serialization_works():
-    shared_text = 'hello\n'
+    shared_text = "hello\n"
 
     def acceptor():
-        listener = multiprocessing.connection.Listener('socket')
+        listener = multiprocessing.connection.Listener("socket")
         conn = listener.accept()
         obj = loads(conn.recv())
         obj.write(shared_text)
@@ -107,21 +109,21 @@ def test_textiowrapper_serialization_works():
         obj.close()
 
     with isolated_filesystem() as path:
-        cwd_fd = os.open('.', os.O_RDONLY)
+        cwd_fd = os.open(".", os.O_RDONLY)
         set_fd_sharing_base_path_fd(cwd_fd)
 
         p = multiprocessing.Process(target=acceptor)
         p.start()
 
-        wait_for_create(path / 'socket', 2)
+        wait_for_create(path / "socket", 2)
         r, w = os.pipe()
         r_obj = os.fdopen(r, closefd=False)
-        w_obj = os.fdopen(w, 'w', closefd=False)
-        c = multiprocessing.connection.Client('socket')
+        w_obj = os.fdopen(w, "w", closefd=False)
+        c = multiprocessing.connection.Client("socket")
         c.send(dumps(w_obj))
         text = r_obj.readline()
         assert text == shared_text
         os.close(r)
         os.close(w)
         p.join()
-        assert p.exitcode == 0, 'Process must have exited cleanly'
+        assert p.exitcode == 0, "Process must have exited cleanly"

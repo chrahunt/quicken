@@ -17,6 +17,7 @@ def lock_guard(l: Union[threading.Lock, threading.RLock]):
     finally:
         l.release()
 
+
 class BoundPath(PosixPath):
     _lock = threading.RLock()
 
@@ -30,6 +31,7 @@ class BoundPath(PosixPath):
         """
         attr = super().__getattribute__(name)
         if callable(attr):
+
             @wraps(attr)
             def wrapper(*args, **kwargs):
                 with ExitStack() as stack:
@@ -41,6 +43,7 @@ class BoundPath(PosixPath):
                         # __init__ is called.
                         pass
                     return attr(*args, **kwargs)
+
             return wrapper
         return attr
 
@@ -58,5 +61,5 @@ def get_bound_path(context, *args) -> BoundPath:
     """
     result = BoundPath(*args, dir_fd=context.fileno())
     if result.is_absolute():
-        raise ValueError('Provided argument must not be absolute')
+        raise ValueError("Provided argument must not be absolute")
     return result

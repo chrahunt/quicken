@@ -39,16 +39,16 @@ class _State:
 
     def _parse(self):
         self._parsed = True
-        text = self._path.read_text(encoding='utf-8')
+        text = self._path.read_text(encoding="utf-8")
         if not text:
-            raise RuntimeError('subprocess did not write to state file')
+            raise RuntimeError("subprocess did not write to state file")
         self._data = json.loads(text)
 
 
 @contextmanager
 def _add_test_helper():
     subprocess_path = str(Path(__file__).parent)
-    paths = os.environ.get('PYTHONPATH', '').split(os.pathsep)
+    paths = os.environ.get("PYTHONPATH", "").split(os.pathsep)
     if subprocess_path not in paths:
         paths.insert(0, subprocess_path)
     with env(PYTHONPATH=os.pathsep.join(paths)):

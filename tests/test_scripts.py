@@ -27,11 +27,11 @@ def test_attribute_accumulator():
 
     get_attribute_accumulator(check).foo.bar.baz()
 
-    assert result == ['foo', 'bar', 'baz']
+    assert result == ["foo", "bar", "baz"]
 
     get_attribute_accumulator(check).__init__.hello._.world()
 
-    assert result == ['__init__', 'hello', '_', 'world']
+    assert result == ["__init__", "hello", "_", "world"]
 
 
 def test_helper_runs_module_and_func():
@@ -39,18 +39,18 @@ def test_helper_runs_module_and_func():
     # When the script helper is requested to import the function
     # Then it will return the correct function
     with local_module():
-        module = Path('pkg/module.py')
+        module = Path("pkg/module.py")
         module.parent.mkdir(parents=True)
         write_text(
             module,
-            '''
+            """
             def example():
                 return 5
-            ''',
+            """,
         )
-        Path('pkg/__init__.py').touch()
+        Path("pkg/__init__.py").touch()
 
-        helper = ConsoleScriptHelper(['pkg', 'module', '_', 'example'])
+        helper = ConsoleScriptHelper(["pkg", "module", "_", "example"])
         func = helper.get_func()
         assert func() == 5
 
@@ -63,11 +63,11 @@ def test_helper_runs_module_without_func():
     # Technically pip doesn't appear to support only-module console_script entrypoint
     # specs, but we'll test for it anyway.
     with local_module():
-        module = Path('pkg/module.py')
+        module = Path("pkg/module.py")
         module.parent.mkdir(parents=True)
         write_text(
             module,
-            '''
+            """
             import sys
 
             from types import ModuleType
@@ -79,23 +79,23 @@ def test_helper_runs_module_without_func():
 
 
             sys.modules[__name__].__class__ = Module
-            ''',
+            """,
         )
-        Path('pkg/__init__.py').touch()
+        Path("pkg/__init__.py").touch()
 
-        helper = ConsoleScriptHelper(['pkg', 'module'])
+        helper = ConsoleScriptHelper(["pkg", "module"])
         func = helper.get_func()
         assert func() == 5
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture(scope="module")
 def poetry_build_venv(venvs):
     venv = venvs.create()
-    venv.install('poetry>=0.12')
+    venv.install("poetry>=0.12")
     yield venv
 
 
-basic_poetry_pyproject = '''
+basic_poetry_pyproject = """
 [tool.poetry]
 name = "hello"
 version = "0.1.0"
@@ -115,17 +115,13 @@ helloctl = "quicken.ctl_script:hello._.main"
 [build-system]
 requires = ["poetry>=0.12"]
 build-backend = "poetry.masonry.api"
-'''
+"""
 
 
 @pytest.fixture
 def project_venvs(quicken_venv, poetry_build_venv, venvs):
     def dict_to_dict_literal(d: Dict[str, str]):
-        return (
-            '{' +
-            ','.join(f'{k!r}: {v!r}' for k, v in d.items()) +
-            '}'
-        )
+        return "{" + ",".join(f"{k!r}: {v!r}" for k, v in d.items()) + "}"
 
     class Factory:
         def create(self, **kwargs):
@@ -141,22 +137,22 @@ def project_venvs(quicken_venv, poetry_build_venv, venvs):
             venv.use_packages_from(poetry_build_venv)
 
             path = stack.enter_context(isolated_filesystem())
-            write_text(path / 'pyproject.toml', basic_poetry_pyproject)
+            write_text(path / "pyproject.toml", basic_poetry_pyproject)
 
-            kwargs.setdefault('test_name', current_test_name())
+            kwargs.setdefault("test_name", current_test_name())
 
             formatted_kwargs = dict_to_dict_literal(kwargs)
 
             write_text(
-                path / 'hello.py',
-                f'''
+                path / "hello.py",
+                f"""
                 def main():
                     from __test_helper__ import record
                     record(**{formatted_kwargs})
-                ''',
-                )
+                """,
+            )
 
-            venv.install('--no-build-isolation', '.')
+            venv.install("--no-build-isolation", ".")
 
             return venv
 
@@ -178,13 +174,13 @@ def test_script_runs_server(project_venv):
     # And the script will have been executed in the same server the second time
     with contained_children():
         with track_state() as run1:
-            result = subprocess.run([str(project_venv.path / 'bin' / 'hello')])
+            result = subprocess.run([str(project_venv.path / "bin" / "hello")])
 
         assert result.returncode == 0
         run1.assert_unrelated_to_current_process()
 
         with track_state() as run2:
-            result = subprocess.run([str(project_venv.path / 'bin' / 'hello')])
+            result = subprocess.run([str(project_venv.path / "bin" / "hello")])
 
         assert result.returncode == 0
         run2.assert_unrelated_to_current_process()
@@ -194,7 +190,9 @@ def test_script_runs_server(project_venv):
 
 
 @non_windows
-def test_script_different_venv_different_servers(quicken_venv, poetry_build_venv, venvs):
+def test_script_different_venv_different_servers(
+    quicken_venv, poetry_build_venv, venvs
+):
     # Given a project that declares a quicken script
     # And the project is installed in venv1
     # And the project is also installed in venv2
@@ -209,29 +207,29 @@ def test_script_different_venv_different_servers(quicken_venv, poetry_build_venv
     venv2.use_packages_from(poetry_build_venv)
 
     with isolated_filesystem() as path:
-        write_text(path / 'pyproject.toml', basic_poetry_pyproject)
+        write_text(path / "pyproject.toml", basic_poetry_pyproject)
 
         write_text(
-            path / 'hello.py',
-            '''
+            path / "hello.py",
+            """
             def main():
                 from __test_helper__ import record
                 record()
-            ''',
+            """,
         )
 
-        venv.install('--no-build-isolation', '.')
-        venv2.install('--no-build-isolation', '.')
+        venv.install("--no-build-isolation", ".")
+        venv2.install("--no-build-isolation", ".")
 
         with contained_children():
             with track_state() as run1:
-                result = subprocess.run([str(venv.path / 'bin' / 'hello')])
+                result = subprocess.run([str(venv.path / "bin" / "hello")])
 
             assert result.returncode == 0
             run1.assert_unrelated_to_current_process()
 
             with track_state() as run2:
-                result = subprocess.run([str(venv2.path / 'bin' / 'hello')])
+                result = subprocess.run([str(venv2.path / "bin" / "hello")])
 
             assert result.returncode == 0
             run1.assert_unrelated_to_current_process()
@@ -251,43 +249,43 @@ def test_script_reloads_server_on_file_change(quicken_venv, poetry_build_venv, v
     venv.use_packages_from(poetry_build_venv)
 
     with isolated_filesystem() as path:
-        write_text(path / 'pyproject.toml', basic_poetry_pyproject)
+        write_text(path / "pyproject.toml", basic_poetry_pyproject)
 
         write_text(
-            path / 'hello.py',
-            '''
+            path / "hello.py",
+            """
             def main():
                 from __test_helper__ import record
                 record(run='1')
-            ''',
+            """,
         )
 
-        venv.install('--no-build-isolation', '.')
+        venv.install("--no-build-isolation", ".")
 
         with contained_children():
             with track_state() as run1:
-                result = subprocess.run([venv.path / 'bin' / 'hello'])
+                result = subprocess.run([venv.path / "bin" / "hello"])
 
             assert result.returncode == 0
-            assert run1.run == '1'
+            assert run1.run == "1"
             run1.assert_unrelated_to_current_process()
 
             write_text(
-                path / 'hello.py',
-                '''
+                path / "hello.py",
+                """
                 def main():
                     from __test_helper__ import record
                     record(run='2')
-                ''',
+                """,
             )
 
-            venv.install('--no-build-isolation', path)
+            venv.install("--no-build-isolation", path)
 
             with track_state() as run2:
-                result = subprocess.run([venv.path / 'bin' / 'hello'])
+                result = subprocess.run([venv.path / "bin" / "hello"])
 
             assert result.returncode == 0
-            assert run2.run == '2'
+            assert run2.run == "2"
             run2.assert_unrelated_to_current_process()
             run2.assert_unrelated_to(run1)
 
@@ -301,9 +299,9 @@ def test_script_respects_idle_timeout(project_venv):
     # Then the server will shut down after that long without
     #  any requests.
     with contained_children():
-        with env(QUICKEN_IDLE_TIMEOUT='0.2'):
+        with env(QUICKEN_IDLE_TIMEOUT="0.2"):
             with track_state() as run1:
-                result = subprocess.run([project_venv.path / 'bin' / 'hello'])
+                result = subprocess.run([project_venv.path / "bin" / "hello"])
 
             assert result.returncode == 0
             run1.assert_unrelated_to_current_process()
@@ -311,7 +309,7 @@ def test_script_respects_idle_timeout(project_venv):
             time.sleep(0.3)
 
             with track_state() as run2:
-                result = subprocess.run([project_venv.path / 'bin' / 'hello'])
+                result = subprocess.run([project_venv.path / "bin" / "hello"])
 
             assert result.returncode == 0
             run2.assert_unrelated_to_current_process()
@@ -328,21 +326,21 @@ def test_script_uses_default_idle_timeout(project_venv):
     with contained_children():
         with env(QUICKEN_IDLE_TIMEOUT=None):
             with track_state() as run1:
-                result = subprocess.run([project_venv.path / 'bin' / 'hello'])
+                result = subprocess.run([project_venv.path / "bin" / "hello"])
 
             assert result.returncode == 0
             run1.assert_unrelated_to_current_process()
 
             result = subprocess.run(
-                [project_venv.path / 'bin' / 'helloctl', 'status', '--json'],
+                [project_venv.path / "bin" / "helloctl", "status", "--json"],
                 stdout=subprocess.PIPE,
             )
             assert result.returncode == 0
             parsed_output = load_json(result.stdout)
-            assert parsed_output['idle_timeout'] == DEFAULT_IDLE_TIMEOUT
+            assert parsed_output["idle_timeout"] == DEFAULT_IDLE_TIMEOUT
 
             with track_state() as run2:
-                result = subprocess.run([project_venv.path / 'bin' / 'hello'])
+                result = subprocess.run([project_venv.path / "bin" / "hello"])
 
             assert result.returncode == 0
             run2.assert_unrelated_to_current_process()
@@ -357,11 +355,11 @@ def test_log_file_unwritable_fails_fast_script(project_venv):
     # Then an exception should be indicated
 
     with isolated_filesystem() as path:
-        log_file = path / 'quicken.log'
+        log_file = path / "quicken.log"
         log_file.touch(0o000)
 
         with env(QUICKEN_LOG=str(log_file)):
-            result = subprocess.run([project_venv.path / 'bin' / 'hello'])
+            result = subprocess.run([project_venv.path / "bin" / "hello"])
             assert result.returncode != 0
 
 
@@ -374,48 +372,46 @@ def test_control_script_status(project_venv):
     # And the same server will be used for a subsequent command
     with contained_children():
         result = subprocess.run(
-            [project_venv.path / 'bin' / 'helloctl', 'status'],
-            stdout=subprocess.PIPE,
+            [project_venv.path / "bin" / "helloctl", "status"], stdout=subprocess.PIPE
         )
         assert result.returncode == 0
-        assert "Status: 'down'" in result.stdout.decode('utf-8')
+        assert "Status: 'down'" in result.stdout.decode("utf-8")
 
         result = subprocess.run(
-            [project_venv.path / 'bin' / 'helloctl', 'status', '--json'],
+            [project_venv.path / "bin" / "helloctl", "status", "--json"],
             stdout=subprocess.PIPE,
         )
         assert result.returncode == 0
         parsed_output = load_json(result.stdout)
         assert len(parsed_output) == 1
-        assert parsed_output['status'] == 'down'
+        assert parsed_output["status"] == "down"
 
         with track_state() as run1:
-            result = subprocess.run([project_venv.path / 'bin' / 'hello'])
+            result = subprocess.run([project_venv.path / "bin" / "hello"])
 
         assert result.returncode == 0
         assert run1.test_name == current_test_name()
         run1.assert_unrelated_to_current_process()
 
         result = subprocess.run(
-            [project_venv.path / 'bin' / 'helloctl', 'status'],
-            stdout=subprocess.PIPE,
+            [project_venv.path / "bin" / "helloctl", "status"], stdout=subprocess.PIPE
         )
         assert result.returncode == 0
-        stdout = result.stdout.decode('utf-8')
+        stdout = result.stdout.decode("utf-8")
         assert "Status: 'up'" in stdout
-        assert f'Pid: {run1.ppid}' in stdout
+        assert f"Pid: {run1.ppid}" in stdout
 
         result = subprocess.run(
-            [project_venv.path / 'bin' / 'helloctl', 'status', '--json'],
+            [project_venv.path / "bin" / "helloctl", "status", "--json"],
             stdout=subprocess.PIPE,
         )
         assert result.returncode == 0
         parsed_output = load_json(result.stdout)
-        assert parsed_output['pid'] == run1.ppid
-        assert parsed_output['status'] == 'up'
+        assert parsed_output["pid"] == run1.ppid
+        assert parsed_output["status"] == "up"
 
         with track_state() as run2:
-            result = subprocess.run([project_venv.path / 'bin' / 'hello'])
+            result = subprocess.run([project_venv.path / "bin" / "hello"])
 
         # Ensure same server is used after status check.
         assert result.returncode == 0
@@ -433,21 +429,20 @@ def test_control_script_stop(project_venv):
     # And the next command will be run with a new server
     with contained_children():
         with track_state() as run1:
-            result = subprocess.run([project_venv.path / 'bin' / 'hello'])
+            result = subprocess.run([project_venv.path / "bin" / "hello"])
 
         assert result.returncode == 0
         assert run1.test_name == current_test_name()
         run1.assert_unrelated_to_current_process()
 
         result = subprocess.run(
-            [project_venv.path / 'bin' / 'helloctl', 'stop'],
-            stdout=subprocess.PIPE,
+            [project_venv.path / "bin" / "helloctl", "stop"], stdout=subprocess.PIPE
         )
 
         assert result.returncode == 0
 
         with track_state() as run2:
-            result = subprocess.run([project_venv.path / 'bin' / 'hello'])
+            result = subprocess.run([project_venv.path / "bin" / "hello"])
 
         # Ensure same server is used after status check.
         assert result.returncode == 0

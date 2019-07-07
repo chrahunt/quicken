@@ -54,10 +54,11 @@ def quicken(
             updates for example. Receives the old and new user_data objects.
         user_data: JSON-serializable data provided to reload_server
     """
+
     def function_handler(main_provider: MainProvider) -> MainFunction:
         @wraps(main_provider)
         def wrapper() -> Optional[int]:
-            if sys.platform.startswith('win'):
+            if sys.platform.startswith("win"):
                 return main_provider()()
 
             if bypass_server and bypass_server():
@@ -66,9 +67,10 @@ def quicken(
             from quicken._internal.timings import report
 
             # Lazy imports to avoid overhead.
-            report('load quicken library')
+            report("load quicken library")
             from .lib import server_runner_wrapper
-            report('end load quicken library')
+
+            report("end load quicken library")
             return server_runner_wrapper(
                 name,
                 main_provider,
