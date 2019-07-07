@@ -16,17 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 def pytest_configure(config):
-    config.addinivalue_line(
-        'markers', 'strace'
-    )
+    config.addinivalue_line("markers", "strace")
 
 
 def is_traced(pid=None):
     if not pid:
         pid = os.getpid()
-    text = Path(f'/proc/{pid}/status').read_text(encoding='utf-8')
-    start = text.find('TracerPid:\t')
-    return text[start + len('TracerPid:\t')] != '0'
+    text = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+    start = text.find("TracerPid:\t")
+    return text[start + len("TracerPid:\t")] != "0"
 
 
 def busy_wait(predicate, timeout, interval=0.01):
@@ -43,20 +41,27 @@ def busy_wait(predicate, timeout, interval=0.01):
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
-    marker = item.get_closest_marker('strace')
+    marker = item.get_closest_marker("strace")
     if not marker:
         yield
         return
 
-    path = Path(__file__).parent / '..' / '..' / '..' / 'logs' / f'strace.{current_test_name()}.log'
+    path = (
+        Path(__file__).parent
+        / ".."
+        / ".."
+        / ".."
+        / "logs"
+        / f"strace.{current_test_name()}.log"
+    )
     p = subprocess.Popen(
-        ['strace', '-yttfo', str(path), '-s', '512', '-p', str(os.getpid())],
+        ["strace", "-yttfo", str(path), "-s", "512", "-p", str(os.getpid())],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     if not busy_wait(is_traced, timeout=5):
-        logger.warning('Could not attach strace')
+        logger.warning("Could not attach strace")
     try:
         yield
     finally:

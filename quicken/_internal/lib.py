@@ -34,41 +34,41 @@ def check_res_ids():
     ruid, euid, suid = os.getresuid()
     if not ruid == euid == suid:
         raise QuickenError(
-            f'real uid ({ruid}), effective uid ({euid}), and saved uid ({suid})'
-            ' must be the same'
+            f"real uid ({ruid}), effective uid ({euid}), and saved uid ({suid})"
+            " must be the same"
         )
 
     rgid, egid, sgid = os.getresgid()
     if not rgid == egid == sgid:
         raise QuickenError(
-            f'real gid ({rgid}), effective gid ({egid}), and saved gid ({sgid})'
-            ' must be the same'
+            f"real gid ({rgid}), effective gid ({egid}), and saved gid ({sgid})"
+            " must be the same"
         )
 
 
 def need_server_reload(manager, reload_server, user_data):
     server_state = manager.server_state_raw
     # Check version first, in case other key fields may have changed.
-    if __version__ != server_state['lib_version']:
-        logger.info('Reloading due to library version change')
+    if __version__ != server_state["lib_version"]:
+        logger.info("Reloading due to library version change")
         return True
 
     gid = os.getgid()
-    if gid != server_state['gid']:
-        logger.info('Reloading server due to gid change')
+    if gid != server_state["gid"]:
+        logger.info("Reloading server due to gid change")
         return True
 
     # XXX: Will not have the intended effect on macOS, see os.getgroups() for
     #  details.
     groups = os.getgroups()
-    if set(groups) != set(server_state['groups']):
-        logger.info('Reloading server due to changed groups')
+    if set(groups) != set(server_state["groups"]):
+        logger.info("Reloading server due to changed groups")
         return True
 
     if reload_server:
         previous_user_data = manager.user_data
         if reload_server(previous_user_data, user_data):
-            logger.info('Reload requested by callback, stopping server.')
+            logger.info("Reload requested by callback, stopping server.")
             return True
 
     return False
@@ -92,7 +92,7 @@ def server_runner_wrapper(
     try:
         json.dumps(user_data)
     except TypeError as e:
-        raise QuickenError('user_data must be serializable') from e
+        raise QuickenError("user_data must be serializable") from e
 
     try:
         runtime_dir = RuntimeDir(name, runtime_dir_path)
@@ -103,13 +103,13 @@ def server_runner_wrapper(
 
     manager = ServerManager(runtime_dir)
 
-    report('connecting to server')
+    report("connecting to server")
     with manager.lock:
         need_start = False
         try:
             client = manager.connect()
         except ConnectionFailed as e:
-            logger.info('Failed to connect to server due to %s.', e)
+            logger.info("Failed to connect to server due to %s.", e)
             need_start = True
         else:
             if need_server_reload(manager, reload_server, user_data):
@@ -118,36 +118,36 @@ def server_runner_wrapper(
 
         if need_start:
             set_importing(True)
-            report('starting user code import')
+            report("starting user code import")
             main = main_provider()
-            report('end user code import')
+            report("end user code import")
             set_importing(False)
-            report('starting server')
+            report("starting server")
             manager.start_server(main, server_idle_timeout, user_data)
-            report('connecting to server')
+            report("connecting to server")
             try:
                 client = manager.connect()
             except ConnectionFailed:
-                logger.exception('failed to connect to server')
-                raise QuickenError('failed to connect to server')
+                logger.exception("failed to connect to server")
+                raise QuickenError("failed to connect to server")
 
-    report('connected to server')
+    report("connected to server")
     proxy = SignalProxy()
     # We must block signals before requesting remote process start otherwise
     # a user signal to the client may race with our ability to propagate it.
     with blocked_signals(forwarded_signals):
         state = ProcessState.for_current_process()
-        report('requesting start')
-        logger.debug('Requesting process start')
+        report("requesting start")
+        logger.debug("Requesting process start")
         req = Request(RequestTypes.run_process, state)
         response = client.send(req)
         pid = response.contents
-        report('process started')
-        logger.debug('Process running with pid: %d', pid)
+        report("process started")
+        logger.debug("Process running with pid: %d", pid)
         proxy.set_target(pid)
 
     # At this point user code is running.
-    logger.debug('Waiting for process to finish')
+    logger.debug("Waiting for process to finish")
     req = Request(RequestTypes.wait_process_done, None)
     response = client.send(req)
     client.close()
@@ -170,13 +170,14 @@ class ServerManager:
     Race conditions are prevented by acquiring an exclusive lock on
     {runtime_dir}/admin during connection and start.
     """
+
     def __init__(self, runtime_dir: RuntimeDir):
         """
         Args:
             runtime_dir: runtime dir used for locks/socket
         """
         self._runtime_dir = runtime_dir
-        self._lock = InterProcessLock('admin')
+        self._lock = InterProcessLock("admin")
 
     def connect(self) -> Client:
         """Attempt to connect to the server.
@@ -187,22 +188,22 @@ class ServerManager:
         Raises:
             ConnectionFailed on connection failure (server not up or accepting)
         """
-        assert self._lock.acquired, 'connect must be called under lock.'
+        assert self._lock.acquired, "connect must be called under lock."
 
         with chdir(self._runtime_dir):
             try:
                 return Client(socket_name)
             except FileNotFoundError as e:
-                raise ConnectionFailed('File not found') from e
+                raise ConnectionFailed("File not found") from e
             except ConnectionRefusedError as e:
-                raise ConnectionFailed('Connection refused') from e
+                raise ConnectionFailed("Connection refused") from e
 
     @property
     def server_state_raw(self) -> Dict[str, Any]:
         """Raw state as read from disk.
         """
         with chdir(self._runtime_dir):
-            with open(server_state_name, encoding='utf-8') as f:
+            with open(server_state_name, encoding="utf-8") as f:
                 text = f.read()
         return json.loads(text)
 
@@ -222,9 +223,7 @@ class ServerManager:
         """Combined, preprocessed server state for CLI.
         """
         server_running = self.server_running
-        state = {
-            'status': 'up' if server_running else 'down'
-        }
+        state = {"status": "up" if server_running else "down"}
 
         if server_running:
             state.update(self.server_state_raw)
@@ -235,7 +234,7 @@ class ServerManager:
     def user_data(self):
         """Returns user data for the current server.
         """
-        return self.server_state_raw['user_data']
+        return self.server_state_raw["user_data"]
 
     def start_server(self, main, server_idle_timeout, user_data):
         """Start server as background process.
@@ -250,12 +249,13 @@ class ServerManager:
                 process of connecting results in server start
             user_data: added to server state
         """
-        assert self._lock.acquired, 'start_server must be called under lock.'
+        assert self._lock.acquired, "start_server must be called under lock."
         # Lazy import so we only take the time to import if we have to start
         # the server.
-        report('start server import')
+        report("start server import")
         from .server import run
-        report('end server import')
+
+        report("end server import")
 
         with chdir(self._runtime_dir):
             try:
@@ -276,7 +276,7 @@ class ServerManager:
         )
 
     def stop_server(self):
-        assert self._lock.acquired, 'stop_server must be called under lock.'
+        assert self._lock.acquired, "stop_server must be called under lock."
 
         # We don't want to leave it to the server to remove the sockets since
         # we do not wait for it to shut down before starting a new one.

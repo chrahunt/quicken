@@ -21,8 +21,8 @@ def test_logging_stream_override_works():
     new_stdout = io.StringIO()
     new_stderr = io.StringIO()
     ProcessState._reset_loggers(new_stdout, new_stderr)
-    logger.debug('Example message')
-    assert 'Example message' in new_stderr.getvalue()
+    logger.debug("Example message")
+    assert "Example message" in new_stderr.getvalue()
 
 
 @pytest.mark.skip

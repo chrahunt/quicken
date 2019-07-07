@@ -8,8 +8,8 @@ from ._imports import multiprocessing_connection
 
 
 def run_in_process(
-        target, name=None, args=(), kwargs=None, allow_detach=False,
-        timeout=None):
+    target, name=None, args=(), kwargs=None, allow_detach=False, timeout=None
+):
     """Run provided target in a multiprocessing.Process.
 
     This function does not require that the `target` and arguments
@@ -66,6 +66,7 @@ def run_in_process(
         except:
             child_pipe.send(True)
             from tblib import pickling_support
+
             pickling_support.install()
             child_pipe.send(sys.exc_info())
             # Wait for signal from parent process to avoid exit/read race
@@ -79,7 +80,7 @@ def run_in_process(
             child_pipe.send(result)
             child_pipe.recv()
 
-    ctx = multiprocessing.get_context('fork')
+    ctx = multiprocessing.get_context("fork")
 
     child_pipe, parent_pipe = ctx.Pipe()
     p = ctx.Process(target=launcher, name=name)
@@ -90,7 +91,7 @@ def run_in_process(
     # Timeout
     if not ready:
         p.kill()
-        raise TimeoutError('Timeout running function.')
+        raise TimeoutError("Timeout running function.")
 
     exc = None
     result = None
@@ -98,6 +99,7 @@ def run_in_process(
         error = parent_pipe.recv()
         if error:
             from tblib import pickling_support
+
             pickling_support.install()
             _, exception, tb = parent_pipe.recv()
             exc = exception.with_traceback(tb)
@@ -107,11 +109,10 @@ def run_in_process(
     if p.sentinel in ready:
         # This can happen if the child process closes file descriptors, but we
         # do not handle it.
-        assert p.exitcode is not None, 'Exit code must exist'
+        assert p.exitcode is not None, "Exit code must exist"
         if p.exitcode:
             if not exc:
-                exc = RuntimeError(
-                    f'Process died with return code {p.exitcode}')
+                exc = RuntimeError(f"Process died with return code {p.exitcode}")
 
     else:
         # Indicate OK to continue.

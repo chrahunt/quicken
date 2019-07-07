@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
-    'active_children',
-    'contained_children',
-    'disable_child_tracking',
-    'kill_children'
+    "active_children",
+    "contained_children",
+    "disable_child_tracking",
+    "kill_children",
 ]
 
 
@@ -37,7 +37,7 @@ class ChildManagerSharedState:
         self._path = base_path
         Path(self._path).touch()
 
-        lock_file = self._path + '.lock'
+        lock_file = self._path + ".lock"
         self._lock = InterProcessLock(lock_file)
         self._tlock = threading.RLock()
 
@@ -64,7 +64,7 @@ class ChildManagerSharedState:
     # }
 
     def load(self):
-        contents = Path(self._path).read_text(encoding='utf-8')
+        contents = Path(self._path).read_text(encoding="utf-8")
         if not contents:
             return
 
@@ -74,10 +74,10 @@ class ChildManagerSharedState:
             logger.warning('Bad JSON text: "%r"', contents)
             raise
 
-        self.keys = set(data['keys'])
+        self.keys = set(data["keys"])
 
         self.children = []
-        for pid, create_time in data['processes']:
+        for pid, create_time in data["processes"]:
             try:
                 process = psutil.Process(pid=pid)
             except psutil.NoSuchProcess:
@@ -88,14 +88,11 @@ class ChildManagerSharedState:
 
     def save(self):
         data = {
-            'keys': list(self.keys),
-            'processes': [
-                [child.pid, child.create_time()]
-                for child in self.children
-            ],
+            "keys": list(self.keys),
+            "processes": [[child.pid, child.create_time()] for child in self.children],
         }
 
-        with open(self._path, 'w', encoding='utf-8') as f:
+        with open(self._path, "w", encoding="utf-8") as f:
             f.write(json.dumps(data))
             f.flush()
             os.fsync(f.fileno())
@@ -111,6 +108,7 @@ class ChildManager:
     - from multiple threads (unless manager is disabled)
     - from within callbacks registered with register_at_fork
     """
+
     def __init__(self, child_start_timeout: float = 5):
         """
         Args:
@@ -119,7 +117,7 @@ class ChildManager:
         """
         # XXX: this directory is leaked
         tempdir = tempfile.mkdtemp()
-        self._state = ChildManagerSharedState(f'{tempdir}/pids')
+        self._state = ChildManagerSharedState(f"{tempdir}/pids")
         self._tls = threading.local()
         self._tls.disabled = False
         self._child_start_timeout = child_start_timeout
@@ -127,8 +125,8 @@ class ChildManager:
         self._re_init()
 
         os.register_at_fork(
-            after_in_parent=self._after_in_parent,
-            after_in_child=self._after_in_child)
+            after_in_parent=self._after_in_parent, after_in_child=self._after_in_child
+        )
 
     def children_pop_all(self):
         with self._state.lock_guard:
@@ -156,7 +154,7 @@ class ChildManager:
         self._child_index = 0
 
     def _make_key(self, pid, index):
-        return f'{pid}[{index}]'
+        return f"{pid}[{index}]"
 
     def _after_in_child(self):
         with self._state.lock_guard:
@@ -192,9 +190,7 @@ class ChildManager:
             now = time.time()
         else:
             logger.error(
-                'Child did not start in time (started: %d; now: %d)',
-                start,
-                now
+                "Child did not start in time (started: %d; now: %d)", start, now
             )
 
         # Unconditionally update index so next child doesn't conflict.
@@ -209,8 +205,7 @@ def active_children():
 
 
 @contextmanager
-def contained_children(
-        timeout=1, assert_graceful=True) -> ContextManager[ChildManager]:
+def contained_children(timeout=1, assert_graceful=True) -> ContextManager[ChildManager]:
     """Automatically kill any Python processes forked in this context, for
     cleanup. Handles any descendents.
 
@@ -228,8 +223,7 @@ def contained_children(
         #  block.
         _, exc, _ = sys.exc_info()
         if assert_graceful and exc is None:
-            assert not num_alive, \
-                f'Unexpected children still alive: {alive}'
+            assert not num_alive, f"Unexpected children still alive: {alive}"
 
 
 def disable_child_tracking():
@@ -256,6 +250,6 @@ def kill_children(timeout=1) -> List[psutil.Process]:
             pass
     gone, alive = psutil.wait_procs(procs, timeout=timeout)
     for p in alive:
-        logger.warning('Cleaning up child: %d', p.pid)
+        logger.warning("Cleaning up child: %d", p.pid)
         p.kill()
     return alive

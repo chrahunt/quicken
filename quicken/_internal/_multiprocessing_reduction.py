@@ -23,6 +23,7 @@ class Pickler(pickle.Pickler):
     """Custom pickler class to avoid changing the global multiprocessing.reduction
     pickler.
     """
+
     _dispatch_table = {}
 
     def __init__(self, *args, **kwargs):
@@ -63,6 +64,7 @@ def set_fd_sharing_base_path_fd(fd: int):
 class Fd:
     """Tag for reduce_fd.
     """
+
     def __init__(self, fd):
         self.fd = fd
 
@@ -77,7 +79,7 @@ def reduce_fd(obj: Fd):
       we can stub out tempfile, saving 5ms).
     """
     fd = obj.fd
-    name = f'{os.getpid()}-{fd}'
+    name = f"{os.getpid()}-{fd}"
 
     with chdir(_fd_sharing_base_path_fd):
         # In case a client crashed and we're re-using the pid.
@@ -121,13 +123,14 @@ register(Fd, reduce_fd)
 def reduce_textio(obj: TextIO):
     if obj.readable() == obj.writable():
         raise ValueError(
-            'TextIO object must be either readable or writable, but not both.')
+            "TextIO object must be either readable or writable, but not both."
+        )
     fd = Fd(obj.fileno())
     return rebuild_textio, (fd, obj.readable(), obj.writable(), obj.encoding)
 
 
 def rebuild_textio(fd: Fd, readable: bool, _writable: bool, encoding: str) -> TextIO:
-    flags = 'r' if readable else 'w'
+    flags = "r" if readable else "w"
     return open(fd.fd, flags, encoding=encoding)
 
 
@@ -146,8 +149,8 @@ def reduce_fileio(obj: FileIO):
 
 def rebuild_fileio(fd: Fd, mode: str):
     # open returns a FileIO object when binary + buffering=0
-    if 'b' not in mode:
-        mode += 'b'
+    if "b" not in mode:
+        mode += "b"
     # Opening an existing file descriptor with 'w' does not truncate the file.
     return open(fd.fd, mode, buffering=0)
 

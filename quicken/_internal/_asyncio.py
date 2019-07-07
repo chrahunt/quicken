@@ -13,6 +13,7 @@ if MYPY_CHECK_RUNNING:
 class DeadlineTimer:
     """Timer that can handle waits > 1 day, since Python < 3.7.1 does not.
     """
+
     MAX_DURATION = 86400
 
     def __init__(self, callback, loop: asyncio.AbstractEventLoop):
@@ -28,7 +29,7 @@ class DeadlineTimer:
 
     def expires_from_now(self, seconds):
         if seconds < 0:
-            raise ValueError('seconds must be positive')
+            raise ValueError("seconds must be positive")
 
         self.cancel()
 

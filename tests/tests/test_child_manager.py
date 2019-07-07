@@ -48,7 +48,7 @@ def test_child_manager_shows_children():
         p.start()
 
         children = active_children()
-        assert len(children) == 1, f'Expected [{p.pid}]'
+        assert len(children) == 1, f"Expected [{p.pid}]"
         child = children[0]
         assert child.pid == p.pid
 

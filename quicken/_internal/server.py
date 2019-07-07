@@ -37,7 +37,7 @@ from ._multiprocessing_asyncio import (
     AsyncListener,
     AsyncProcess,
     ConnectionClose,
-    ListenerStopped
+    ListenerStopped,
 )
 from ._typing import MYPY_CHECK_RUNNING
 from ._signal import settable_signals
@@ -52,7 +52,7 @@ if MYPY_CHECK_RUNNING:
     from ._types import NoneFunction
 
 
-logger = ContextLogger(logging.getLogger(__name__), prefix='server_')
+logger = ContextLogger(logging.getLogger(__name__), prefix="server_")
 
 
 def run(
@@ -75,30 +75,23 @@ def run(
     Raises:
         If there are any issues starting the server errors are re-raised.
     """
-    logger.debug('Starting server launcher')
+    logger.debug("Starting server launcher")
 
     daemon_options = {
         # This ensures that relative files are created in the context of the
         # actual runtime dir and not at the path that happens to exist at the
         # time.
-        'working_directory': runtime_dir.fileno(),
+        "working_directory": runtime_dir.fileno()
     }
 
     target = functools.partial(
-        _run_server,
-        socket_handler,
-        server_idle_timeout,
-        user_data,
+        _run_server, socket_handler, server_idle_timeout, user_data
     )
-    return run_in_process(
-        daemonize,
-        args=(target, daemon_options),
-        allow_detach=True,
-    )
+    return run_in_process(daemonize, args=(target, daemon_options), allow_detach=True)
 
 
 def daemonize(detach, target, daemon_options: Dict):
-    os.chdir(daemon_options['working_directory'])
+    os.chdir(daemon_options["working_directory"])
 
     # Make the process a process leader - signals sent to the parent group
     # will no longer propagate by default.
@@ -126,10 +119,7 @@ def daemonize(detach, target, daemon_options: Dict):
 
 
 def _run_server(
-    callback,
-    server_idle_timeout: Optional[float],
-    user_data,
-    done,
+    callback, server_idle_timeout: Optional[float], user_data, done
 ) -> None:
     """Server that provides sockets to `callback`.
 
@@ -142,31 +132,31 @@ def _run_server(
         done: callback function invoked after setup and before we start handling
             requests
     """
-    logger.debug('_run_server()')
+    logger.debug("_run_server()")
 
     loop = asyncio.new_event_loop()
 
     def print_exception(_loop, context):
-        exc = context.get('exception')
+        exc = context.get("exception")
         if exc:
-            formatted_exc = ''.join(
-                traceback.format_exception(type(exc), exc, exc.__traceback__))
+            formatted_exc = "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            )
         else:
-            formatted_exc = '<no exception>'
-        logger.error(
-            'Error in event loop: %r\n%s', context, formatted_exc)
+            formatted_exc = "<no exception>"
+        logger.error("Error in event loop: %r\n%s", context, formatted_exc)
 
     loop.set_exception_handler(print_exception)
 
     handler = ProcessConnectionHandler(callback, {}, loop=loop)
 
     def finish_loop():
-        logger.debug('Stopping loop')
+        logger.debug("Stopping loop")
         loop.stop()
         tasks = asyncio.all_tasks(loop)
-        logger.debug('Number of pending tasks: %d', len(tasks))
+        logger.debug("Number of pending tasks: %d", len(tasks))
         loop.run_until_complete(asyncio.gather(*tasks))
-        logger.debug('Finished pending tasks')
+        logger.debug("Finished pending tasks")
 
     # socket_name is relative and we must already have cwd set to the
     # runtime_dir.
@@ -176,11 +166,11 @@ def _run_server(
         handler,
         finish_loop,
         server_idle_timeout,
-        loop=loop
+        loop=loop,
     )
 
     def handle_sigterm():
-        logger.debug('Received SIGTERM')
+        logger.debug("Received SIGTERM")
         loop.create_task(server.stop())
 
     loop.add_signal_handler(signal.SIGTERM, handle_sigterm)
@@ -188,28 +178,28 @@ def _run_server(
     done()
 
     # For logging.
-    multiprocessing.current_process().name = 'server'
+    multiprocessing.current_process().name = "server"
 
     # For server state info.
     pid = os.getpid()
     server_state = {
-        'create_time': time.time(),
-        'lib_version': __version__,
-        'idle_timeout': server_idle_timeout,
-        'pid': pid,
-        'user_data': user_data,
-        'groups': os.getgroups(),
-        'gid': os.getgid(),
+        "create_time": time.time(),
+        "lib_version": __version__,
+        "idle_timeout": server_idle_timeout,
+        "pid": pid,
+        "user_data": user_data,
+        "groups": os.getgroups(),
+        "gid": os.getgid(),
     }
 
-    with open(server_state_name, 'w', encoding='utf-8') as f:
+    with open(server_state_name, "w", encoding="utf-8") as f:
         json.dump(server_state, f)
 
-    logger.debug('Starting server')
+    logger.debug("Starting server")
     server.serve()
 
     loop.run_forever()
-    logger.debug('Server finished.')
+    logger.debug("Server finished.")
 
 
 class ConnectionHandler(ABC):
@@ -222,7 +212,7 @@ class ConnectionHandler(ABC):
         pass
 
 
-connection_id_var = contextvars.ContextVar('server_connection_id')
+connection_id_var = contextvars.ContextVar("server_connection_id")
 
 
 class ProcessConnectionHandler(ConnectionHandler):
@@ -246,14 +236,14 @@ class ProcessConnectionHandler(ConnectionHandler):
     async def handle_connection(self, connection: AsyncConnectionAdapter):
         self._num_active_connections += 1
         connection_id_var.set(connection.connection.fileno())
-        logger.debug('Handling connection')
+        logger.debug("Handling connection")
         try:
             await self._handle_connection(connection)
         except Exception:
-            logger.exception('Unexpected exception handling connection')
+            logger.exception("Unexpected exception handling connection")
             raise
         finally:
-            logger.debug('Done with connection')
+            logger.debug("Done with connection")
             self._num_active_connections -= 1
             async with self._connection_finish_cv:
                 self._connection_finish_cv.notify_all()
@@ -276,27 +266,25 @@ class ProcessConnectionHandler(ConnectionHandler):
         async def handle_request():
             """Wait for and handle a single request."""
             nonlocal process, process_task
-            logger.debug('Waiting for request')
+            logger.debug("Waiting for request")
             request = await queue.get()
 
             if request.name == RequestTypes.run_process:
-                assert process is None, \
-                    'Process must not have been started'
+                assert process is None, "Process must not have been started"
                 process_state = request.contents
                 process = self._start_callback(process_state)
                 process_task = asyncio.create_task(process.wait())
                 pid = process.pid
-                logger.debug('Running process in handler: %d', pid)
+                logger.debug("Running process in handler: %d", pid)
                 await connection.send(Response(pid))
 
             elif request.name == RequestTypes.wait_process_done:
-                assert process is not None, \
-                    'Process must have been started'
-                logger.debug('Waiting for process to exit')
+                assert process is not None, "Process must have been started"
+                logger.debug("Waiting for process to exit")
                 # We don't want the process.wait() task to be cancelled in case
                 # our connection gets broken.
                 exitcode = await asyncio.shield(process_task)
-                logger.debug('Result: %d', exitcode)
+                logger.debug("Result: %d", exitcode)
                 await connection.send(Response(exitcode))
 
             return True
@@ -305,9 +293,9 @@ class ProcessConnectionHandler(ConnectionHandler):
             try:
                 request: Request = await connection.recv()
             except ConnectionClose:
-                logger.debug('Connection closed')
+                logger.debug("Connection closed")
             except ConnectionResetError:
-                logger.debug('Connection reset')
+                logger.debug("Connection reset")
             else:
                 # We dispatch asynchronously so we can always notice connection
                 # reset quickly.
@@ -317,14 +305,14 @@ class ProcessConnectionHandler(ConnectionHandler):
             # This occurs when we have disconnected from the client so cancel
             # any pending responses and kill the child process.
             if process:
-                logger.debug('Killing child process')
+                logger.debug("Killing child process")
                 try:
                     process.kill()
                 except ProcessLookupError:
                     # No problem, process already exited.
                     pass
 
-            logger.debug('Cancelling request handler')
+            logger.debug("Cancelling request handler")
             request_handler.cancel()
 
         async def loop(coro):
@@ -341,12 +329,12 @@ class ProcessConnectionHandler(ConnectionHandler):
         except asyncio.CancelledError:
             pass
         finally:
-            logger.debug('Task cancelled or exception')
+            logger.debug("Task cancelled or exception")
             all_tasks.cancel()
 
         if process_task:
-            logger.debug('Waiting for child process to exit')
-            logger.debug('Process task: %s', process_task)
+            logger.debug("Waiting for child process to exit")
+            logger.debug("Process task: %s", process_task)
             await process_task
 
     def _start_callback(self, process_state) -> AsyncProcess:
@@ -370,11 +358,12 @@ class ProcessConnectionHandler(ConnectionHandler):
 
     async def handle_shutdown(self):
         """Shutdown executor"""
-        logger.debug('Waiting for all connection handling to be done')
+        logger.debug("Waiting for all connection handling to be done")
         # Wait for handling of all connections to be done.
         async with self._connection_finish_cv:
             await self._connection_finish_cv.wait_for(
-                lambda: not self._num_active_connections)
+                lambda: not self._num_active_connections
+            )
 
 
 class Server:
@@ -387,6 +376,7 @@ class Server:
 
     Not thread-safe.
     """
+
     def __init__(
         self,
         socket_path,
@@ -395,7 +385,7 @@ class Server:
         on_shutdown: NoneFunction,
         idle_timeout: Optional[int] = None,
         shutdown_ctx=None,
-        loop=None
+        loop=None,
     ):
         """
         Args:
@@ -434,7 +424,7 @@ class Server:
         # 1. No accepted connections are unhandled
         # 2. All pending asynchronous functions have returned
         # 3. All cleanup by the handler is done.
-        logger.debug('Server.stop()')
+        logger.debug("Server.stop()")
         self._shutting_down = True
         with ExitStack() as stack:
             if self._shutdown_ctx:
@@ -443,14 +433,14 @@ class Server:
             self._clear_idle_timer()
             # Closing the listener ensures there will be no more connections
             # queued.
-            logger.debug('Waiting for listener close')
+            logger.debug("Waiting for listener close")
             await self._listener.close()
-            logger.debug('Waiting for pending connections')
+            logger.debug("Waiting for pending connections")
             async with self._shutdown_accept_cv:
                 await self._shutdown_accept_cv.wait()
-            logger.debug('Waiting for handler shutdown')
+            logger.debug("Waiting for handler shutdown")
             await self._handler.handle_shutdown()
-            logger.debug('Waiting for shutdown callback')
+            logger.debug("Waiting for shutdown callback")
             # Finish everything off.
             self._on_shutdown()
 
@@ -473,7 +463,7 @@ class Server:
                 connection = await self._listener.accept()
             except ListenerStopped:
                 if not self._shutting_down:
-                    logger.error('Listener has stopped')
+                    logger.error("Listener has stopped")
                 else:
                     async with self._shutdown_accept_cv:
                         self._shutdown_accept_cv.notify()
@@ -489,8 +479,7 @@ class Server:
             self._idle_handle_close()
 
         self._loop.create_task(wait_closed())
-        self._loop.create_task(
-            self._handler.handle_connection(connection))
+        self._loop.create_task(self._handler.handle_connection(connection))
 
     def _handle_timeout(self):
         self._loop.create_task(self.stop())

@@ -23,9 +23,7 @@ from quicken._internal.constants import server_state_name, socket_name
 from quicken._internal.xdg import RuntimeDir
 
 from . import cli_factory
-from ..utils import (
-    argv, captured_std_streams, env, isolated_filesystem, kept, umask
-)
+from ..utils import argv, captured_std_streams, env, isolated_filesystem, kept, umask
 from ..utils.path import get_bound_path
 from ..utils.process import contained_children
 from ..utils.pytest import non_windows
@@ -128,8 +126,8 @@ def test_quicken_is_importing_not_set_when_bypassed():
 def test_runner_inherits_std_streams():
     # Given the server is not up
     # And the standard streams have been overridden
-    error_text = 'hello world'
-    stdout_text = f'stdout : {error_text}'
+    error_text = "hello world"
+    stdout_text = f"stdout : {error_text}"
 
     @cli_factory()
     def runner():
@@ -149,7 +147,7 @@ def test_runner_inherits_std_streams():
         stdout_output = stdout.read()
         stderr_output = stderr.read()
         assert error_text in stderr_output
-        assert 'Traceback' in stderr_output
+        assert "Traceback" in stderr_output
         assert stdout_output == stdout_text
 
 
@@ -162,25 +160,25 @@ def test_runner_inherits_environment():
     @cli_factory()
     def runner():
         def inner():
-            record(env=os.environ['TEST'])
+            record(env=os.environ["TEST"])
 
         return inner
 
     test_pid = os.getpid()
 
     with contained_children():
-        with env(TEST='1'):
+        with env(TEST="1"):
             with track_state() as run1:
                 assert runner() == 0
 
-            assert run1.env == '1'
+            assert run1.env == "1"
             assert run1.pid != test_pid
 
-        with env(TEST='2'):
+        with env(TEST="2"):
             with track_state() as run2:
                 assert runner() == 0
 
-            assert run2.env == '2'
+            assert run2.env == "2"
             assert run2.pid != test_pid
             assert run1.ppid == run2.ppid
 
@@ -196,7 +194,7 @@ def test_runner_inherits_args():
     test_pid = os.getpid()
 
     with contained_children():
-        args = ['1', '2', '3']
+        args = ["1", "2", "3"]
         with argv(args):
             with track_state() as run1:
                 assert runner() == 0
@@ -205,7 +203,7 @@ def test_runner_inherits_args():
             assert run1.pid != test_pid
             assert run1.ppid != test_pid
 
-        args = ['a', 'b', 'c']
+        args = ["a", "b", "c"]
         with argv(args):
             with track_state() as run2:
                 assert runner() == 0
@@ -249,13 +247,15 @@ def test_runner_inherits_umask():
     # When the runner process creates files
     # Then they should have permission 700
     with isolated_filesystem() as path:
+
         @cli_factory()
         def runner():
             def inner():
                 output_path.touch(0o777)
+
             return inner
 
-        output_path = path / 'output.txt'
+        output_path = path / "output.txt"
 
         with contained_children():
             with umask(0o077):
@@ -278,13 +278,10 @@ def test_client_receiving_signals_forwards_to_runner():
     pid = os.getpid()
 
     def to_string(signals):
-        return ','.join(
-            str(int(s)) for s in sorted(signals))
+        return ",".join(str(int(s)) for s in sorted(signals))
 
     # Omit SIGT* to avoid stopping the test.
-    test_signals = forwarded_signals - {
-        signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU
-    }
+    test_signals = forwarded_signals - {signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU}
 
     # For convenience we get the process itself to send signals to the client
     # which then sends them back to the process.
@@ -307,20 +304,18 @@ def test_client_receiving_signals_forwards_to_runner():
                 elif received_signal:
                     # Only trace after the first empty response.
                     received_signal = False
-                    logger.debug(
-                        'Waiting for %s', test_signals - received_signals)
+                    logger.debug("Waiting for %s", test_signals - received_signals)
 
-            output_path.write_text(
-                to_string(received_signals), encoding='utf-8')
+            output_path.write_text(to_string(received_signals), encoding="utf-8")
 
         return inner
 
     with isolated_filesystem() as path:
-        output_path = Path(path) / 'output.txt'
+        output_path = Path(path) / "output.txt"
 
         with contained_children():
             assert runner() == 0
-            traced_signals = output_path.read_text(encoding='utf-8')
+            traced_signals = output_path.read_text(encoding="utf-8")
             assert traced_signals == to_string(test_signals)
 
 
@@ -346,22 +341,22 @@ def test_client_receiving_tstp_ttin_stops_itself():
             # any race conditions where the file may be empty.
             pid = os.getpid()
             fd, path = tempfile.mkstemp()
-            os.write(fd, str(pid).encode('utf-8'))
+            os.write(fd, str(pid).encode("utf-8"))
             os.fsync(fd)
             os.close(fd)
             os.rename(path, runner_pid_file)
 
             for sig in test_signals:
-                logger.debug('Waiting for %s', sig)
+                logger.debug("Waiting for %s", sig)
                 signal.sigwait({sig})
                 # Stop self to indicate success to test process.
                 os.kill(pid, signal.SIGSTOP)
 
-            logger.debug('Waiting for signal to exit')
+            logger.debug("Waiting for signal to exit")
             # This is required otherwise we may exit while the test is checking
             # for our status.
             signal.sigwait({resume_signal})
-            logger.debug('All signals received')
+            logger.debug("All signals received")
 
         return inner
 
@@ -379,41 +374,37 @@ def test_client_receiving_tstp_ttin_stops_itself():
         with contained_children():
             # Get process pids. The Process object already has the client pid,
             # but we need to wait for the runner pid to be written to the file.
-            runner_pid_file = Path('runner_pid').absolute()
+            runner_pid_file = Path("runner_pid").absolute()
             runtime_dir = RuntimeDir(dir_path=str(path))
             p = Process(target=client)
             p.start()
             assert wait_for_create(
-                get_bound_path(runtime_dir, runner_pid_file.name), timeout=2), \
-                f'{runner_pid_file} must have been created'
-            runner_pid = int(runner_pid_file.read_text(encoding='utf-8'))
+                get_bound_path(runtime_dir, runner_pid_file.name), timeout=2
+            ), f"{runner_pid_file} must have been created"
+            runner_pid = int(runner_pid_file.read_text(encoding="utf-8"))
 
             # Stop and continue the client process, checking that it was
             # correctly applied to both the client and runner processes.
             client_process = psutil.Process(pid=p.pid)
             runner_process = psutil.Process(pid=runner_pid)
             for sig in [signal.SIGTSTP, signal.SIGTTIN]:
-                logger.debug('Sending %s', sig)
+                logger.debug("Sending %s", sig)
                 client_process.send_signal(sig)
-                logger.debug('Waiting for client to stop')
-                wait_for(
-                    lambda: client_process.status() == psutil.STATUS_STOPPED)
-                logger.debug('Waiting for runner to stop')
-                wait_for(
-                    lambda: runner_process.status() == psutil.STATUS_STOPPED)
+                logger.debug("Waiting for client to stop")
+                wait_for(lambda: client_process.status() == psutil.STATUS_STOPPED)
+                logger.debug("Waiting for runner to stop")
+                wait_for(lambda: runner_process.status() == psutil.STATUS_STOPPED)
 
                 client_process.send_signal(signal.SIGCONT)
-                logger.debug('Waiting for client to resume')
-                wait_for(
-                    lambda: client_process.status() != psutil.STATUS_STOPPED)
-                logger.debug('Waiting for runner to resume')
-                wait_for(
-                    lambda: runner_process.status() != psutil.STATUS_STOPPED)
+                logger.debug("Waiting for client to resume")
+                wait_for(lambda: client_process.status() != psutil.STATUS_STOPPED)
+                logger.debug("Waiting for runner to resume")
+                wait_for(lambda: runner_process.status() != psutil.STATUS_STOPPED)
 
             # Resume runner process so it exits.
             runner_process.send_signal(resume_signal)
 
-            logger.debug('Waiting for client to finish')
+            logger.debug("Waiting for client to finish")
             p.join()
             assert p.exitcode == 0
 
@@ -432,11 +423,11 @@ def test_killed_client_causes_handler_to_exit():
             signal.pthread_sigmask(signal.SIG_BLOCK, forwarded_signals)
             pid = os.getpid()
             fd, path = tempfile.mkstemp()
-            os.write(fd, str(pid).encode('utf-8'))
+            os.write(fd, str(pid).encode("utf-8"))
             os.fsync(fd)
             os.close(fd)
             os.rename(path, runner_pid_file)
-            logger.debug('Inner function waiting')
+            logger.debug("Inner function waiting")
             while True:
                 signal.pause()
 
@@ -444,33 +435,33 @@ def test_killed_client_causes_handler_to_exit():
 
     # Client runs in child process so we don't kill the test process itself.
     def client():
-        logger.debug('Client starting')
+        logger.debug("Client starting")
         signal.pthread_sigmask(signal.SIG_BLOCK, forwarded_signals)
         sys.exit(runner())
 
     with isolated_filesystem() as path:
         with contained_children():
-            runner_pid_file = Path('runner_pid').absolute()
+            runner_pid_file = Path("runner_pid").absolute()
             runtime_dir = RuntimeDir(dir_path=str(path))
             p = Process(target=client)
-            logger.debug('Starting process')
+            logger.debug("Starting process")
             p.start()
 
-            logger.debug('Waiting for pid file')
+            logger.debug("Waiting for pid file")
             assert wait_for_create(
-                get_bound_path(runtime_dir, runner_pid_file.name), timeout=2), \
-                f'{runner_pid_file} must have been created'
-            runner_pid = int(runner_pid_file.read_text(encoding='utf-8'))
-            logger.debug('Runner started with pid: %d', runner_pid)
+                get_bound_path(runtime_dir, runner_pid_file.name), timeout=2
+            ), f"{runner_pid_file} must have been created"
+            runner_pid = int(runner_pid_file.read_text(encoding="utf-8"))
+            logger.debug("Runner started with pid: %d", runner_pid)
 
             client_process = psutil.Process(pid=p.pid)
             runner_process = psutil.Process(pid=runner_pid)
 
-            logger.debug('Killing client')
+            logger.debug("Killing client")
             client_process.kill()
-            logger.debug('Waiting for client')
+            logger.debug("Waiting for client")
             p.join()
-            logger.debug('Waiting for runner')
+            logger.debug("Waiting for runner")
             runner_process.wait()
 
 
@@ -563,6 +554,7 @@ def test_leftover_socket_file_is_ok():
     # Then the server should be started successfully
     # And the server should process the command
     with isolated_filesystem() as path:
+
         @cli_factory(runtime_dir_path=path)
         def runner():
             def inner():
@@ -582,9 +574,7 @@ def test_user_data_saved_by_server():
     # Then the server should write the user data to the user_data
     #  field of the metadata
     with isolated_filesystem() as path:
-        user_data = {
-            'hello': 1,
-        }
+        user_data = {"hello": 1}
 
         @cli_factory(runtime_dir_path=path, user_data=user_data)
         def runner():
@@ -595,9 +585,9 @@ def test_user_data_saved_by_server():
 
         with contained_children():
             assert runner() == 0
-            text = (path / server_state_name).read_text(encoding='utf-8')
+            text = (path / server_state_name).read_text(encoding="utf-8")
             obj = json.loads(text)
-            assert user_data == obj['user_data']
+            assert user_data == obj["user_data"]
 
 
 def test_user_data_provided_to_reload():
@@ -610,9 +600,7 @@ def test_user_data_provided_to_reload():
 
     reload_handler = Mock()
 
-    user_data_1 = {
-        'hello': 1,
-    }
+    user_data_1 = {"hello": 1}
 
     @cli_factory(user_data=user_data_1, reload_server=reload_handler)
     def runner_1():
@@ -621,14 +609,13 @@ def test_user_data_provided_to_reload():
 
         return inner
 
-    user_data_2 = {
-        'hello': 2,
-    }
+    user_data_2 = {"hello": 2}
 
     @cli_factory(user_data=user_data_2, reload_server=reload_handler)
     def runner_2():
         def inner():
             pass
+
         return inner
 
     with contained_children():
@@ -652,7 +639,7 @@ def test_user_data_invalid_raises_exception():
     with pytest.raises(QuickenError) as e:
         runner()
 
-    assert 'user_data' in str(e)
+    assert "user_data" in str(e)
 
 
 def test_server_reload_ok():
@@ -663,7 +650,7 @@ def test_server_reload_ok():
     # Then the server will be restarted
     # And the decorated function should be executed in process with a new parent
     def sometimes_reload(*_):
-        return os.environ.get('TEST_RELOAD') is not None
+        return os.environ.get("TEST_RELOAD") is not None
 
     @cli_factory(reload_server=sometimes_reload)
     def runner():
@@ -681,7 +668,7 @@ def test_server_reload_ok():
         assert run1.pid != test_pid
         assert run1.ppid != test_pid
 
-        with env(TEST_RELOAD='1'):
+        with env(TEST_RELOAD="1"):
             with track_state() as run2:
                 assert runner() == 0
 
@@ -733,8 +720,8 @@ def test_server_reload_when_library_version_changes():
     import quicken
 
     def increment_patch(version: str):
-        x, y, z = version.split('.')
-        return '.'.join([x, y, str(int(z) + 1)])
+        x, y, z = version.split(".")
+        return ".".join([x, y, str(int(z) + 1)])
 
     test_pid = os.getpid()
 
@@ -745,7 +732,7 @@ def test_server_reload_when_library_version_changes():
         assert run1.pid != test_pid
         assert run1.ppid != test_pid
 
-        with kept(quicken._internal.lib, '__version__'):
+        with kept(quicken._internal.lib, "__version__"):
             # Set on _lib since the attribute is imported directly.
             quicken._internal.lib.__version__ = increment_patch(
                 quicken._internal.lib.__version__
@@ -795,6 +782,7 @@ def test_unwritable_runtime_dir_raises_exception():
     # And it should raise a QuickenError with message 'runtime directory \'{}\'
     #  is not writable'
     with isolated_filesystem() as path:
+
         @cli_factory(runtime_dir_path=path)
         def runner():
             def inner():
@@ -808,7 +796,7 @@ def test_unwritable_runtime_dir_raises_exception():
             with pytest.raises(QuickenError) as e:
                 runner()
 
-        assert f'{path} must have permissions 700' in str(e)
+        assert f"{path} must have permissions 700" in str(e)
 
 
 def test_server_not_creating_socket_file_raises_exception(mocker):
@@ -817,7 +805,8 @@ def test_server_not_creating_socket_file_raises_exception(mocker):
     # When the decorated function is executed
     # Then it should time out waiting for the socket file to be created and
     #  raise a QuickenError with message 'timed out connecting to server'
-    mocker.patch('quicken._internal.server.run')
+    mocker.patch("quicken._internal.server.run")
+
     @cli_factory()
     def runner():
         def inner():
@@ -837,7 +826,7 @@ def test_server_not_listening_on_socket_file_raises_exception(mocker):
     # When the decorated function is executed
     # Then it should raise a QuickenError with message 'failed to connect to
     #  server'
-    run_function = mocker.patch('quicken._internal.server.run')
+    run_function = mocker.patch("quicken._internal.server.run")
 
     def fake_listener(*_args, **_kwargs):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -846,6 +835,7 @@ def test_server_not_listening_on_socket_file_raises_exception(mocker):
     run_function.side_effect = fake_listener
 
     with isolated_filesystem() as path:
+
         @cli_factory(runtime_dir_path=path)
         def runner():
             def inner():
@@ -870,22 +860,23 @@ def test_runner_fails_when_communicating_to_stopped_server():
         @cli_factory(runtime_dir_path=path)
         def runner():
             def inner():
-                output_file.write_text(message, encoding='utf-8')
+                output_file.write_text(message, encoding="utf-8")
 
             return inner
 
-        message = 'hello world'
-        output_file = Path(path) / 'output.txt'
+        message = "hello world"
+        output_file = Path(path) / "output.txt"
 
         with contained_children():
             # Ensure server is running.
             assert runner() == 0
-            text = output_file.read_text(encoding='utf-8')
+            text = output_file.read_text(encoding="utf-8")
             assert text == message
 
             server_state = json.loads(
-                Path(server_state_name).read_text(encoding='utf-8'))
-            os.kill(server_state['pid'], signal.SIGSTOP)
+                Path(server_state_name).read_text(encoding="utf-8")
+            )
+            os.kill(server_state["pid"], signal.SIGSTOP)
             with pytest.raises(QuickenError):
                 runner()
 
@@ -910,8 +901,9 @@ def test_command_does_not_hang_on_first_invocation():
 
         assert run1.pid != test_pid
         assert run1.ppid != test_pid
-        assert not active_children(), \
-            f'Active children present: {[c.pid for c in active_children()]}'
+        assert (
+            not active_children()
+        ), f"Active children present: {[c.pid for c in active_children()]}"
 
         with track_state() as run2:
             assert runner() == 0
@@ -938,10 +930,10 @@ def test_runner_rejects_on_different_uids():
         return inner
 
     cases = [
-        [(3, 3, 2), ['real', 'effective']],
-        [(3, 2, 3), ['real', 'saved']],
-        [(2, 3, 3), ['effective', 'saved']],
-        [(2, 3, 4), ['real', 'effective', 'saved']],
+        [(3, 3, 2), ["real", "effective"]],
+        [(3, 2, 3), ["real", "saved"]],
+        [(2, 3, 3), ["effective", "saved"]],
+        [(2, 3, 4), ["real", "effective", "saved"]],
     ]
 
     with contained_children():
@@ -951,7 +943,7 @@ def test_runner_rejects_on_different_uids():
             def patched():
                 return id_result
 
-            with patch('os.getresuid', patched):
+            with patch("os.getresuid", patched):
                 with pytest.raises(QuickenError) as e:
                     runner()
 
@@ -962,7 +954,7 @@ def test_runner_rejects_on_different_uids():
                 assert runner() == 0
                 bypass = False
 
-            with patch('os.getresgid', patched):
+            with patch("os.getresgid", patched):
                 with pytest.raises(QuickenError) as e:
                     runner()
 
@@ -988,14 +980,14 @@ def test_runner_reloads_server_on_different_groups():
     test_pid = os.getpid()
 
     with contained_children():
-        with patch('os.getgroups', lambda: (1, 2, 3)):
+        with patch("os.getgroups", lambda: (1, 2, 3)):
             with track_state() as run1:
                 assert runner() == 0
 
         assert run1.pid != test_pid
         assert run1.ppid != test_pid
 
-        with patch('os.getgroups', lambda: (1, 2)):
+        with patch("os.getgroups", lambda: (1, 2)):
             with track_state() as run2:
                 assert runner() == 0
 
@@ -1019,14 +1011,14 @@ def test_runner_reloads_server_on_different_gid():
     test_pid = os.getpid()
 
     with contained_children():
-        with patch('os.getgid', lambda: 1):
+        with patch("os.getgid", lambda: 1):
             with track_state() as run1:
                 assert runner() == 0
 
         assert run1.pid != test_pid
         assert run1.ppid != test_pid
 
-        with patch('os.getgid', lambda: 2):
+        with patch("os.getgid", lambda: 2):
             with track_state() as run2:
                 assert runner() == 0
 

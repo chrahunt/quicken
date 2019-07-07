@@ -22,8 +22,8 @@ def test_runtime_dir_uses_xdg_env_var():
     #   $XDG_RUNTIME_DIR/quicken-test.
     with tempfile.TemporaryDirectory() as p:
         with env(XDG_RUNTIME_DIR=p):
-            runtime_dir = RuntimeDir('quicken-test')
-            assert str(runtime_dir) == os.path.join(p, 'quicken-test')
+            runtime_dir = RuntimeDir("quicken-test")
+            assert str(runtime_dir) == os.path.join(p, "quicken-test")
             os.fchdir(runtime_dir.fileno())
             assert str(runtime_dir) == os.getcwd()
 
@@ -36,9 +36,9 @@ def test_runtime_dir_uses_tmpdir_env_var():
     #   $TMPDIR/quicken-test-{uid}
     with tempfile.TemporaryDirectory() as p:
         with env(XDG_RUNTIME_DIR=None, TMPDIR=p):
-            runtime_dir = RuntimeDir('quicken-test')
+            runtime_dir = RuntimeDir("quicken-test")
             uid = os.getuid()
-            assert str(runtime_dir) == os.path.join(p, f'quicken-test-{uid}')
+            assert str(runtime_dir) == os.path.join(p, f"quicken-test-{uid}")
             os.fchdir(runtime_dir.fileno())
             assert str(runtime_dir) == os.getcwd()
 
@@ -49,9 +49,9 @@ def test_runtime_dir_uses_tmp_fallback():
     # Then it should succeed and its path should be
     #   /tmp/quicken-test-{uid}
     with env(XDG_RUNTIME_DIR=None, TMPDIR=None):
-        runtime_dir = RuntimeDir('quicken-test')
+        runtime_dir = RuntimeDir("quicken-test")
         uid = os.getuid()
-        assert str(runtime_dir) == f'/tmp/quicken-test-{uid}'
+        assert str(runtime_dir) == f"/tmp/quicken-test-{uid}"
         os.fchdir(runtime_dir.fileno())
         assert str(runtime_dir) == os.getcwd()
 
@@ -60,7 +60,7 @@ def test_runtime_dir_fails_when_no_args():
     with pytest.raises(ValueError) as excinfo:
         _runtime_dir = RuntimeDir()
     v = str(excinfo.value)
-    assert 'base_name' in v and 'dir_path' in v
+    assert "base_name" in v and "dir_path" in v
 
 
 def test_runtime_dir_fails_when_bad_permissions():
@@ -71,16 +71,16 @@ def test_runtime_dir_fails_when_bad_permissions():
         with pytest.raises(RuntimeError) as excinfo:
             _runtime_dir = RuntimeDir(dir_path=p)
         v = str(excinfo.value)
-        assert 'must have permissions 700' in v
+        assert "must have permissions 700" in v
 
 
 def test_runtime_dir_succeeds_creating_a_file():
-    sample_text = 'hello'
+    sample_text = "hello"
     with tempfile.TemporaryDirectory() as p:
         runtime_dir = RuntimeDir(dir_path=p)
-        file = get_bound_path(runtime_dir, 'example')
-        file.write_text(sample_text, encoding='utf-8')
-        text = (Path(p) / 'example').read_text(encoding='utf-8')
+        file = get_bound_path(runtime_dir, "example")
+        file.write_text(sample_text, encoding="utf-8")
+        text = (Path(p) / "example").read_text(encoding="utf-8")
         assert sample_text == text
 
 
@@ -90,18 +90,18 @@ def test_runtime_dir_path_fails_when_directory_unlinked_and_recreated():
     # And recreated manually
     # When the runtime dir is used to create a new file
     # Then the operation should fail.
-    sample_text = 'hello'
+    sample_text = "hello"
     with tempfile.TemporaryDirectory() as p:
         runtime_dir = RuntimeDir(dir_path=p)
-        file = get_bound_path(runtime_dir, 'example')
+        file = get_bound_path(runtime_dir, "example")
 
     Path(p).mkdir()
 
     try:
         with pytest.raises(FileNotFoundError) as excinfo:
-            file.write_text(sample_text, encoding='utf-8')
+            file.write_text(sample_text, encoding="utf-8")
 
-        assert 'example' in str(excinfo.value)
+        assert "example" in str(excinfo.value)
         assert Path(p).exists()
     finally:
         Path(p).rmdir()

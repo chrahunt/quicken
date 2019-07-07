@@ -28,9 +28,7 @@ __all__ = []
 def callback(helper: ConsoleScriptHelper):
     from ._internal.decorator import quicken
 
-    idle_timeout = float(
-        os.environ.get(ENV_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT)
-    )
+    idle_timeout = float(os.environ.get(ENV_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT))
 
     wrapper = quicken(
         helper.name,

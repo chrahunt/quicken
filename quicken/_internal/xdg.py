@@ -18,8 +18,8 @@ def chdir(fd) -> ContextManager:
         fd: anything suitable for passing to os.chdir(), or something with a
             `fileno` member.
     """
-    cwd = os.open('.', os.O_RDONLY)
-    if hasattr(fd, 'fileno'):
+    cwd = os.open(".", os.O_RDONLY)
+    if hasattr(fd, "fileno"):
         fd = fd.fileno()
     os.chdir(fd)
     try:
@@ -49,6 +49,7 @@ class RuntimeDir:
     which does chdir to the directory before providing arguments as a relative
     path.
     """
+
     def __init__(self, base_name: str = None, dir_path=None):
         """
         Args:
@@ -60,8 +61,8 @@ class RuntimeDir:
         if dir_path is None:
             if base_name is None:
                 raise ValueError(
-                    'At least one of `base_name` or `dir_path` must be'
-                    ' provided.')
+                    "At least one of `base_name` or `dir_path` must be" " provided."
+                )
             dir_path = runtime_dir(base_name)
         self._path = dir_path
         # Open first.
@@ -74,12 +75,12 @@ class RuntimeDir:
         # passed to mkdir.
         result = os.stat(self._fd)
         if not stat.S_ISDIR(result.st_mode):
-            raise RuntimeError(f'{dir_path} must be a directory')
+            raise RuntimeError(f"{dir_path} must be a directory")
         if result.st_uid != os.getuid():
-            raise RuntimeError(f'{dir_path} must be owned by the current user')
+            raise RuntimeError(f"{dir_path} must be owned by the current user")
         user_rwx = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR
         if stat.S_IMODE(result.st_mode) != user_rwx:
-            raise RuntimeError(f'{dir_path} must have permissions 700')
+            raise RuntimeError(f"{dir_path} must have permissions 700")
         # At this point the directory referred to by self._fd is:
         # * owned by the user
         # * has permission 700
@@ -97,15 +98,15 @@ def runtime_dir(base_name):
         return f"{os.environ['XDG_RUNTIME_DIR']}/{base_name}"
     except KeyError:
         uid = os.getuid()
-        base_name = f'{base_name}-{uid}'
+        base_name = f"{base_name}-{uid}"
         try:
             return f"{os.environ['TMPDIR']}/{base_name}"
         except KeyError:
-            return f'/tmp/{base_name}'
+            return f"/tmp/{base_name}"
 
 
 def cache_dir(base_name):
     try:
-        return os.path.join(os.environ['XDG_CACHE_HOME'], base_name)
+        return os.path.join(os.environ["XDG_CACHE_HOME"], base_name)
     except KeyError:
-        return os.path.join(os.environ['HOME'], '.cache', base_name)
+        return os.path.join(os.environ["HOME"], ".cache", base_name)

@@ -21,6 +21,7 @@ class Client:
     """Enforces a request/response protocol on top of
     multiprocessing.connection.Client.
     """
+
     def __init__(self, address):
         self._client = make_client(address)
 

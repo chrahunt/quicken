@@ -47,6 +47,7 @@ def env(**kwargs) -> ContextManager:
             changed, any changes made to other environment variables in the with
             block are not undone.
     """
+
     def update(target, source):
         updated = {}
         for k, v in source.items():
@@ -119,23 +120,21 @@ def captured_std_streams() -> ContextManager[Tuple[TextIO, TextIO, TextIO]]:
     stdin_r, stdin_w = os.pipe()
     stdout_r, stdout_w = os.pipe()
     stderr_r, stderr_w = os.pipe()
-    stdin_old, stdout_old, stderr_old = \
-        sys.stdin, sys.stdout, sys.stderr
+    stdin_old, stdout_old, stderr_old = sys.stdin, sys.stdout, sys.stderr
 
     # We close the files explicitly at the end of ths scope.
     sys.stdin = os.fdopen(stdin_r, closefd=False)
-    sys.stdout = os.fdopen(stdout_w, 'w', closefd=False)
-    sys.stderr = os.fdopen(stderr_w, 'w', closefd=False)
+    sys.stdout = os.fdopen(stdout_w, "w", closefd=False)
+    sys.stderr = os.fdopen(stderr_w, "w", closefd=False)
     try:
-        yield os.fdopen(stdin_w, 'w'), os.fdopen(stdout_r), os.fdopen(stderr_r)
+        yield os.fdopen(stdin_w, "w"), os.fdopen(stdout_r), os.fdopen(stderr_r)
     finally:
         sys.stdout.flush()
         sys.stderr.flush()
         os.close(stdin_r)
         os.close(stdout_w)
         os.close(stderr_w)
-        sys.stdin, sys.stdout, sys.stderr = \
-            stdin_old, stdout_old, stderr_old
+        sys.stdin, sys.stdout, sys.stderr = stdin_old, stdout_old, stderr_old
 
 
 @contextmanager
@@ -155,9 +154,9 @@ def write_text(path: Path, text: str, **params):
 @contextmanager
 def local_module():
     with isolated_filesystem() as path:
-        with kept(sys, 'path'):
+        with kept(sys, "path"):
             sys.path.append(str(path))
-            with kept(sys, 'modules'):
+            with kept(sys, "modules"):
                 yield
 
 

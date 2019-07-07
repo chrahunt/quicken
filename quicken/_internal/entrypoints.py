@@ -28,17 +28,18 @@ def getattr_nested(o: Any, parts: List[str]) -> Any:
 class Name:
     """Dotted Python name, available as a string or list.
     """
+
     def __init__(self, parts: Union[List[str], str] = None):
         if parts is None:
             parts = []
         if isinstance(parts, str):
             self.name = parts
-            self.parts = parts.split('.')
+            self.parts = parts.split(".")
         elif isinstance(parts, list):
-            self.name = '.'.join(parts)
+            self.name = ".".join(parts)
             self.parts = parts
         else:
-            raise TypeError('parts must be a list or string')
+            raise TypeError("parts must be a list or string")
 
     def __len__(self) -> int:
         return len(self.name)
@@ -48,6 +49,7 @@ def get_function(module_name: Name, function_name: Name):
     """Given a module and function name, retrieve the function.
     """
     import importlib
+
     module = importlib.import_module(module_name.name)
     return getattr_nested(module, function_name.parts)
 
@@ -57,7 +59,7 @@ def parse_entrypoint(spec: str) -> Tuple[Name, Name]:
     separate parts.
     """
     try:
-        module_part, function_part = spec.split(':', maxsplit=1)
+        module_part, function_part = spec.split(":", maxsplit=1)
     except ValueError:
         return Name(spec), Name()
     else:
@@ -74,7 +76,7 @@ def get_main_details() -> MainDetails:
     """Get details for script referenced by __main__.
     """
     result = MainDetails()
-    result.path = sys.modules['__main__'].__file__
+    result.path = sys.modules["__main__"].__file__
     stat_result = os.stat(result.path)
     result.mtime = stat_result[stat.ST_MTIME]
     result.ctime = stat_result[stat.ST_CTIME]
@@ -89,8 +91,8 @@ def get_server_key(key: Dict[str, Any]) -> str:
     Returns:
         digest for locating server runtime directory
     """
-    text = json.dumps(key, sort_keys=True, separators=(',', ':'))
-    return sha512(text.encode('utf-8')).hexdigest()
+    text = json.dumps(key, sort_keys=True, separators=(",", ":"))
+    return sha512(text.encode("utf-8")).hexdigest()
 
 
 def get_script_details(module: str, func: str) -> Tuple[str, Dict[str, Any]]:
@@ -98,20 +100,16 @@ def get_script_details(module: str, func: str) -> Tuple[str, Dict[str, Any]]:
     Returns:
         (digest, reload_criteria)
     """
-    main = sys.modules['__main__'].__file__
+    main = sys.modules["__main__"].__file__
     bin_dir = os.path.dirname(main)
     # Data used for calculating server key.
-    key = {
-        'dir': bin_dir,
-        'module': module,
-        'func': func,
-    }
+    key = {"dir": bin_dir, "module": module, "func": func}
     digest = get_server_key(key)
     result = os.stat(main)
     # Keys used for determining if server reload required.
-    key['mtime'] = result[stat.ST_MTIME]
-    key['ctime'] = result[stat.ST_CTIME]
-    logger.debug('Digest: %s', key, digest)
+    key["mtime"] = result[stat.ST_MTIME]
+    key["ctime"] = result[stat.ST_CTIME]
+    logger.debug("Digest: %s", key, digest)
     return digest, key
 
 
@@ -136,14 +134,14 @@ def get_attribute_accumulator(callback: AttributeAccumulatorCallback):
     # attributes of our "module". The set of attributes may change over time but
     # will probably always be dunders. For that reason we will only recognize
     # a few dunder attributes as valid identifiers for user code.
-    ALLOWED_DUNDERS = ['__init__', '__main__']
+    ALLOWED_DUNDERS = ["__init__", "__main__"]
 
     def is_dunder(name):
-        return name.startswith('__') and name.endswith('__') and 4 < len(name)
+        return name.startswith("__") and name.endswith("__") and 4 < len(name)
 
     class Accumulator:
         def __getattribute__(self, name):
-            if name == '__call__':
+            if name == "__call__":
                 return object.__getattribute__(self, name)
 
             if is_dunder(name) and name not in ALLOWED_DUNDERS:
@@ -164,15 +162,17 @@ def get_attribute_accumulator(callback: AttributeAccumulatorCallback):
 class ConsoleScriptHelper:
     """Helper class for console script.
     """
+
     def __init__(self, parts: List[str]):
         self._module_name, self._function_name = self._parse_script_spec(parts)
         self.digest, self.metadata = get_script_details(
             self._module_name.name, self._function_name.name
         )
-        self.name = f'quicken.entrypoint.{self.digest}'
+        self.name = f"quicken.entrypoint.{self.digest}"
 
     def get_func(self):
         import importlib
+
         module = importlib.import_module(self._module_name.name)
         return getattr_nested(module, self._function_name.parts)
 
@@ -185,17 +185,18 @@ class ConsoleScriptHelper:
             module name, function name
         """
         try:
-            i = parts.index('_')
+            i = parts.index("_")
         except ValueError:
             return Name(parts), Name()
         else:
-            return Name(parts[:i]), Name(parts[i+1:])
+            return Name(parts[:i]), Name(parts[i + 1 :])
 
 
 def console_script(callback):
     """Wraps a callback meant to be a wrapper
     around a user-provided script.
     """
+
     def inner(parts):
         helper = ConsoleScriptHelper(parts)
         return callback(helper)

@@ -36,13 +36,13 @@ def is_main(node: ast.AST) -> bool:
     else:
         return False
 
-    if name.id != '__name__':
+    if name.id != "__name__":
         return False
 
     if not isinstance(name.ctx, ast.Load):
         return False
 
-    if str_part.s != '__main__':
+    if str_part.s != "__main__":
         return False
 
     return True

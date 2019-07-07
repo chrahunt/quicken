@@ -30,7 +30,7 @@ def _settable_signal(sig) -> bool:
         return False
     except ValueError as e:
         # Windows response
-        assert e.args[0] == 'invalid signal value'
+        assert e.args[0] == "invalid signal value"
         return False
     else:
         signal.signal(sig, old)
@@ -40,7 +40,7 @@ def _settable_signal(sig) -> bool:
 signal_range = set(range(1, signal.NSIG))
 settable_signals = set(filter(_settable_signal, signal_range))
 
-if not sys.platform.startswith('win'):
+if not sys.platform.startswith("win"):
     forwarded_signals = settable_signals - {
         # We skip SIGCHLD because it interferes with tests that use multiprocessing.
         # We do not expect the client to receive the signal in any case anyway.
@@ -70,6 +70,7 @@ class SignalProxy:
     1. All signals are sent to the target process except SIGCHLD, SIGT*
     2. If SIGT* is received then we forward it and stop the current process.
     """
+
     def set_target(self, pid):
         self._pid = pid
         self._install_handler()

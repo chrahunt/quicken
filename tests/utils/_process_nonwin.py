@@ -21,10 +21,10 @@ logging.basicConfig(level=logging.DEBUG)
 
 
 __all__ = [
-    'active_children',
-    'contained_children',
-    'disable_child_tracking',
-    'kill_children'
+    "active_children",
+    "contained_children",
+    "disable_child_tracking",
+    "kill_children",
 ]
 
 
@@ -55,8 +55,7 @@ def active_children() -> List[psutil.Process]:
 
 
 @contextmanager
-def contained_children(
-        timeout=1, assert_graceful=True) -> ContextManager:
+def contained_children(timeout=1, assert_graceful=True) -> ContextManager:
     """Automatically kill any Python processes forked in this context, for
     cleanup. Handles any descendants.
 
@@ -75,8 +74,7 @@ def contained_children(
         #  block.
         _, exc, _ = sys.exc_info()
         if assert_graceful and exc is None:
-            assert not num_alive, \
-                f'Unexpected children still alive: {alive}'
+            assert not num_alive, f"Unexpected children still alive: {alive}"
 
 
 def disable_child_tracking():
@@ -103,6 +101,6 @@ def kill_children(timeout=1) -> List[psutil.Process]:
             pass
     gone, alive = psutil.wait_procs(procs, timeout=timeout)
     for p in alive:
-        logger.warning('Cleaning up child: %d', p.pid)
+        logger.warning("Cleaning up child: %d", p.pid)
         p.kill()
     return alive
