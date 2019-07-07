@@ -29,7 +29,7 @@ except ImportError:
 from .utils.pytest import current_test_name
 from .utils.process import disable_child_tracking, kill_children
 
-from quicken._internal._logging import DefaultSingleLineLogFormatter
+from quicken._internal.cli._logging import DefaultSingleLineLogFormatter
 
 
 log_dir = Path(__file__).parent.parent / "logs"

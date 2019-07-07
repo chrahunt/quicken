@@ -44,17 +44,17 @@ import sys
 
 from functools import partial
 
+from ._logging import default_configuration
 from .helpers import CliServerManager, Commands
 from .parsing import is_main
 from .._imports import sha512
-from .._logging import default_configuration
 from .._typing import MYPY_CHECK_RUNNING
-from ..constants import DEFAULT_IDLE_TIMEOUT, ENV_IDLE_TIMEOUT
+from ..constants import DEFAULT_IDLE_TIMEOUT, ENV_IDLE_TIMEOUT, ENV_LOG_FILE
 from ..timings import report
 from ..xdg import RuntimeDir
 
 if MYPY_CHECK_RUNNING:
-    from typing import Callable, List, Tuple
+    from typing import Callable, List, Optional, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -272,6 +272,36 @@ class ModuleHandler:
             raise ImportError("No code object available for %s" % self._module_name)
 
 
+class ConfigurationError(Exception):
+    """Error in CLI that should be propagated to the user.
+    """
+
+    pass
+
+
+def handle_logging_options(args=None):
+    log_file = None
+    if args:
+        log_file = args.log_file
+    if not log_file:
+        log_file = os.environ.get(ENV_LOG_FILE)
+
+    if not log_file:
+        return
+
+    try:
+        default_configuration(log_file)
+    except PermissionError:
+        raise ConfigurationError(f'Log file "{log_file}" is not writable.')
+
+
+def add_logging_options(parser):
+    parser.add_argument(
+        "--log-file",
+        help=f"path to file in which to write logs, required if -v is provided. May also be provided with {ENV_LOG_FILE}.",
+    )
+
+
 RUN_COMMAND = "run"
 
 
@@ -294,6 +324,7 @@ def get_arg_parser():
     run_parser = subparsers.add_parser(
         RUN_COMMAND, description="Run a command on a quicken server.", help="run code"
     )
+    add_logging_options(run_parser)
     add_command_type_group(run_parser)
     run_parser.add_argument(
         "args",
@@ -304,6 +335,7 @@ def get_arg_parser():
     status_parser = subparsers.add_parser(
         Commands.STATUS, description="Get server status.", help="get server status"
     )
+    add_logging_options(status_parser)
     add_command_type_group(status_parser)
     status_parser.add_argument(
         "--json", action="store_true", help="output status data as JSON"
@@ -312,32 +344,25 @@ def get_arg_parser():
     stop_parser = subparsers.add_parser(
         Commands.STOP, description="Stop server.", help="stop server if it is running"
     )
+    add_logging_options(stop_parser)
     add_command_type_group(stop_parser)
 
     return parser
 
 
-def main():
-    report("start main()")
-
-    parser = get_arg_parser()
-    args = parser.parse_args()
-
-    try:
-        default_configuration()
-    except PermissionError:
-        parser.error(f'QUICKEN_LOG ({os.environ["QUICKEN_LOG"]}) is not writable')
+def _main(args) -> Optional[int]:
+    handle_logging_options(args)
 
     if args.file:
         path = args.file
 
         if not os.access(path, os.R_OK):
-            parser.error(f"Cannot read {path}")
+            raise ConfigurationError(f"Cannot read {path}.")
 
         try:
             handler = PathHandler(path)
         except FileNotFoundError:
-            parser.error(f"{path} does not exist")
+            raise ConfigurationError(f"{path} does not exist.")
 
     # elif args.m:
     #    # We do not have a good strategy for avoiding import of the parent module
@@ -355,8 +380,8 @@ def main():
         # noinspection PyUnboundLocalVariable
         sys.argv = handler.argv_prefix + cmd_args
 
-        sys.exit(
-            run(handler.name, handler.metadata, handler.main, handler.reload_callback)
+        return run(
+            handler.name, handler.metadata, handler.main, handler.reload_callback
         )
 
     from ..lib import ServerManager
@@ -375,3 +400,15 @@ def main():
 
         elif args.action == Commands.STOP:
             cli_manager.stop()
+
+
+def main():
+    report("start main()")
+
+    parser = get_arg_parser()
+    args = parser.parse_args()
+
+    try:
+        sys.exit(_main(args))
+    except ConfigurationError as e:
+        parser.error(e.args[0])

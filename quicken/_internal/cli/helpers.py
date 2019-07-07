@@ -62,6 +62,7 @@ class CliServerManager:
             self._writeln(json.dumps(state, sort_keys=True, separators=(",", ":")))
         else:
             self._writeln(pretty_state(state))
+        self._writeln("")
 
     def _writeln(self, text: str) -> None:
         self._output.writelines([text])

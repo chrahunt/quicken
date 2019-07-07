@@ -8,9 +8,8 @@ import os
 import stat
 import sys
 
-from quicken._internal._imports import sha512
-from quicken._internal._logging import default_configuration
-from quicken._internal._typing import MYPY_CHECK_RUNNING
+from ._imports import sha512
+from ._typing import MYPY_CHECK_RUNNING
 
 if MYPY_CHECK_RUNNING:
     from typing import Any, Callable, Dict, List, Tuple, Union
@@ -200,7 +199,5 @@ def console_script(callback):
     def inner(parts):
         helper = ConsoleScriptHelper(parts)
         return callback(helper)
-
-    default_configuration()
 
     return get_attribute_accumulator(inner)
